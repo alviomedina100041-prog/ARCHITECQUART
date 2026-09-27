@@ -7,6 +7,7 @@ from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -18,7 +19,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QSplitter,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
@@ -45,6 +45,16 @@ class MainWindow(QMainWindow):
         self.dirty = False
         self._loading_editor = False
 
+        self.log_lines: list[str] = []
+        self.bib_entries: list[dict[str, str]] = []
+
+        self.preview_dialog: QDialog | None = None
+        self.preview_view: QWebEngineView | None = None
+        self.logs_dialog: QDialog | None = None
+        self.logs_view: QPlainTextEdit | None = None
+        self.bib_dialog: QDialog | None = None
+        self.terminal_dialog: QDialog | None = None
+
         screen = QApplication.primaryScreen()
         geometry = screen.availableGeometry() if screen else None
         self.compact = bool(
@@ -64,20 +74,16 @@ class MainWindow(QMainWindow):
         self.quarto = QuartoManager()
         self.quarto.log_line.connect(self._append_log)
         self.quarto.preview_ready.connect(self._preview_ready)
-        self.quarto.preview_stopped.connect(
-            lambda: self._set_status("Preview detenido")
-        )
+        self.quarto.preview_stopped.connect(self._preview_stopped)
         self.quarto.render_finished.connect(self._render_finished)
 
+        # Write to disk only after the user has paused for a moment.
+        # This prevents Quarto Preview from rebuilding while a sentence is
+        # still being typed.
         self.autosave_timer = QTimer(self)
         self.autosave_timer.setSingleShot(True)
-        self.autosave_timer.setInterval(900)
+        self.autosave_timer.setInterval(2500)
         self.autosave_timer.timeout.connect(self._autosave)
-
-        self.reload_timer = QTimer(self)
-        self.reload_timer.setSingleShot(True)
-        self.reload_timer.setInterval(1500)
-        self.reload_timer.timeout.connect(self._reload_preview)
 
         self._build_ui()
         self.setStyleSheet(APP_STYLE)
@@ -91,41 +97,32 @@ class MainWindow(QMainWindow):
 
         outer.addWidget(self._build_top_bar())
 
-        vertical = QSplitter(Qt.Vertical)
-        horizontal = QSplitter(Qt.Horizontal)
-        horizontal.setChildrenCollapsible(False)
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setHandleWidth(3)
 
-        horizontal.addWidget(self._build_book_panel())
-        horizontal.addWidget(self._build_editor_panel())
-        horizontal.addWidget(self._build_preview_panel())
+        self.main_splitter.addWidget(self._build_book_panel())
+        self.main_splitter.addWidget(self._build_editor_panel())
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)
 
         if self.compact:
-            horizontal.setSizes([225, 610, 485])
+            self.main_splitter.setSizes([285, 1040])
         else:
-            horizontal.setSizes([270, 760, 560])
+            self.main_splitter.setSizes([320, 1240])
 
-        horizontal.setStretchFactor(0, 0)
-        horizontal.setStretchFactor(1, 1)
-        horizontal.setStretchFactor(2, 1)
-
-        vertical.addWidget(horizontal)
-        vertical.addWidget(self._build_bottom_panel())
-        vertical.setSizes([565, 150] if self.compact else [690, 190])
-        vertical.setStretchFactor(0, 1)
-        vertical.setStretchFactor(1, 0)
-
-        outer.addWidget(vertical, 1)
+        outer.addWidget(self.main_splitter, 1)
         outer.addWidget(self._build_status_bar())
         self.setCentralWidget(central)
 
     def _build_top_bar(self) -> QWidget:
         frame = QFrame()
         frame.setObjectName("TopBar")
-        frame.setFixedHeight(50 if self.compact else 62)
+        frame.setFixedHeight(52 if self.compact else 62)
 
         layout = QHBoxLayout(frame)
-        layout.setContentsMargins(11, 6, 11, 6)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(5)
 
         title = QLabel("▣  ArchiTecQuart")
         title.setObjectName("AppTitle")
@@ -133,37 +130,54 @@ class MainWindow(QMainWindow):
 
         self.project_label = QLabel("Sin libro")
         self.project_label.setObjectName("Muted")
+        self.project_label.setMaximumWidth(150 if self.compact else 240)
         layout.addWidget(self.project_label)
         layout.addStretch(1)
+
+        self.preview_state = QLabel("● Preview detenido")
+        self.preview_state.setObjectName("PreviewOff")
+        layout.addWidget(self.preview_state)
 
         open_btn = QPushButton("Abrir")
         open_btn.clicked.connect(self._choose_project)
 
-        new_btn = QPushButton("+ Capítulo")
+        new_btn = QPushButton("+ Cap.")
+        new_btn.setToolTip("Nuevo capítulo")
         new_btn.clicked.connect(self._new_chapter)
 
         save_btn = QPushButton("Guardar")
         save_btn.clicked.connect(self._save_current)
 
-        self.auto_btn = QPushButton("Auto Preview")
+        self.auto_btn = QPushButton("Auto")
         self.auto_btn.setCheckable(True)
         self.auto_btn.setChecked(True)
         self.auto_btn.setToolTip(
-            "Quarto Preview se inicia una sola vez. "
-            "El editor guarda con debounce y la vista se recarga sin reiniciar Quarto."
+            "Mantiene Quarto Preview ejecutándose. "
+            "El archivo se guarda 2.5 s después de dejar de escribir."
         )
         self.auto_btn.toggled.connect(self._toggle_auto_preview)
+
+        preview_btn = QPushButton("Preview")
+        preview_btn.clicked.connect(self._show_preview_dialog)
+
+        bib_btn = QPushButton("Biblio")
+        bib_btn.setToolTip("Bibliografía")
+        bib_btn.clicked.connect(self._show_bibliography_dialog)
+
+        logs_btn = QPushButton("Logs")
+        logs_btn.clicked.connect(self._show_logs_dialog)
+
+        terminal_btn = QPushButton("Terminal")
+        terminal_btn.clicked.connect(self._show_terminal_dialog)
 
         render_btn = QPushButton("▶ Render")
         render_btn.setObjectName("Primary")
         render_btn.clicked.connect(lambda: self._render(None))
 
-        preview_btn = QPushButton("◉ Preview")
-        preview_btn.clicked.connect(self._ensure_preview)
-
         export_btn = QToolButton()
         export_btn.setText("Exportar ▾")
         export_menu = QMenu(export_btn)
+
         for label, target in [
             ("HTML", "html"),
             ("PDF", "pdf"),
@@ -183,8 +197,11 @@ class MainWindow(QMainWindow):
             new_btn,
             save_btn,
             self.auto_btn,
-            render_btn,
             preview_btn,
+            bib_btn,
+            logs_btn,
+            terminal_btn,
+            render_btn,
             export_btn,
         ]:
             layout.addWidget(widget)
@@ -194,16 +211,31 @@ class MainWindow(QMainWindow):
     def _build_book_panel(self) -> QWidget:
         frame = QFrame()
         frame.setObjectName("SidePanel")
-        frame.setMinimumWidth(195)
-        frame.setMaximumWidth(285)
+
+        if self.compact:
+            frame.setMinimumWidth(250)
+            frame.setMaximumWidth(340)
+        else:
+            frame.setMinimumWidth(280)
+            frame.setMaximumWidth(390)
 
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(9, 9, 9, 9)
+        layout.setSpacing(7)
 
+        header = QHBoxLayout()
         title = QLabel("Estructura del libro")
         title.setObjectName("SectionTitle")
-        layout.addWidget(title)
+
+        add_btn = QPushButton("+")
+        add_btn.setFixedWidth(30)
+        add_btn.setToolTip("Nuevo capítulo")
+        add_btn.clicked.connect(self._new_chapter)
+
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(add_btn)
+        layout.addLayout(header)
 
         self.book_tree = QTreeWidget()
         self.book_tree.setHeaderHidden(True)
@@ -217,8 +249,8 @@ class MainWindow(QMainWindow):
         frame.setObjectName("EditorPanel")
 
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(5)
+        layout.setContentsMargins(7, 7, 7, 7)
+        layout.setSpacing(6)
 
         top = QHBoxLayout()
         self.file_label = QLabel("Selecciona un capítulo")
@@ -251,70 +283,10 @@ class MainWindow(QMainWindow):
 
         return frame
 
-    def _build_preview_panel(self) -> QWidget:
-        frame = QFrame()
-        frame.setObjectName("PreviewPanel")
-
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(5)
-
-        top = QHBoxLayout()
-        title = QLabel("Vista previa")
-        title.setObjectName("SectionTitle")
-        top.addWidget(title)
-        top.addStretch(1)
-
-        reload_btn = QPushButton("↻")
-        reload_btn.setFixedWidth(30)
-        reload_btn.setToolTip("Recargar vista")
-        reload_btn.clicked.connect(self._reload_preview)
-
-        external_btn = QPushButton("↗")
-        external_btn.setFixedWidth(30)
-        external_btn.setToolTip("Abrir preview en navegador")
-        external_btn.clicked.connect(self._open_preview_external)
-
-        top.addWidget(reload_btn)
-        top.addWidget(external_btn)
-        layout.addLayout(top)
-
-        self.preview = QWebEngineView()
-        self.preview.setZoomFactor(0.82 if self.compact else 1.0)
-        self.preview.setHtml(
-            "<html><body style='font-family:sans-serif;padding:40px;color:#64748b'>"
-            "<h2>Vista previa de Quarto</h2>"
-            "<p>Abre un libro Quarto para iniciar el preview automático.</p>"
-            "</body></html>"
-        )
-        layout.addWidget(self.preview, 1)
-
-        return frame
-
-    def _build_bottom_panel(self) -> QWidget:
-        self.bottom_tabs = QTabWidget()
-
-        self.bib_table = QTableWidget(0, 5)
-        self.bib_table.setHorizontalHeaderLabels(
-            ["Clave", "Autor", "Título", "Año", "Tipo"]
-        )
-        self.bib_table.horizontalHeader().setStretchLastSection(True)
-        self.bottom_tabs.addTab(self.bib_table, "Bibliografía")
-
-        self.logs = QPlainTextEdit()
-        self.logs.setReadOnly(True)
-        self.logs.setMaximumBlockCount(1200)
-        self.bottom_tabs.addTab(self.logs, "Logs")
-
-        self.terminal = TerminalWidget(str(self.project_root))
-        self.bottom_tabs.addTab(self.terminal, "Terminal")
-
-        return self.bottom_tabs
-
     def _build_status_bar(self) -> QWidget:
         frame = QFrame()
         frame.setObjectName("StatusBar")
-        frame.setFixedHeight(27)
+        frame.setFixedHeight(28)
 
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(9, 2, 9, 2)
@@ -332,9 +304,39 @@ class MainWindow(QMainWindow):
 
         return frame
 
+    def _dialog_size(self, width_ratio: float = 0.82, height_ratio: float = 0.82) -> tuple[int, int]:
+        screen = QApplication.primaryScreen()
+        geometry = screen.availableGeometry() if screen else None
+
+        if not geometry:
+            return 1000, 650
+
+        width = min(1120, max(760, int(geometry.width() * width_ratio)))
+        height = min(690, max(500, int(geometry.height() * height_ratio)))
+        return width, height
+
+    def _new_dialog(self, title: str, width_ratio: float = 0.82) -> QDialog:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setWindowFlag(Qt.Dialog, True)
+        dialog.setAttribute(Qt.WA_DeleteOnClose, True)
+
+        width, height = self._dialog_size(width_ratio)
+        dialog.resize(width, height)
+        dialog.setStyleSheet(APP_STYLE)
+        return dialog
+
     def _load_project(self, root: Path) -> None:
         self._save_current(silent=True)
         self.quarto.stop_preview()
+        self._set_preview_state(False)
+
+        if self.preview_dialog:
+            self.preview_dialog.close()
+        if self.bib_dialog:
+            self.bib_dialog.close()
+        if self.terminal_dialog:
+            self.terminal_dialog.close()
 
         self.project_root = root.expanduser().resolve()
         self.book = BookModel(self.project_root)
@@ -353,7 +355,7 @@ class MainWindow(QMainWindow):
         self.right_status.setText(f"Quarto {version}  •  UTF-8")
 
         if self.book.is_book() and self.auto_btn.isChecked():
-            QTimer.singleShot(250, self._ensure_preview)
+            QTimer.singleShot(350, self._ensure_preview)
 
     def _refresh_tree(self) -> None:
         self.book_tree.clear()
@@ -370,9 +372,10 @@ class MainWindow(QMainWindow):
             item.setData(0, Qt.UserRole, str(index_file))
             self.book_tree.addTopLevelItem(item)
 
-        def add(parent, entry: dict) -> None:
+        def add(parent: QTreeWidgetItem | None, entry: dict) -> None:
             item = QTreeWidgetItem([entry["title"]])
             path = entry.get("path")
+
             if path:
                 item.setData(0, Qt.UserRole, str(self.project_root / path))
 
@@ -400,7 +403,7 @@ class MainWindow(QMainWindow):
             return
 
         if value == "__bibliography__":
-            self.bottom_tabs.setCurrentIndex(0)
+            self._show_bibliography_dialog()
             return
 
         path = Path(value)
@@ -431,25 +434,27 @@ class MainWindow(QMainWindow):
         except ValueError:
             self.left_status.setText(path.name)
 
-        if self.quarto.base_url:
-            QTimer.singleShot(250, self._show_current_preview)
+        # Switching chapters may change the URL, but we never force a reload
+        # while the user is typing.
+        if self.preview_view and self.quarto.base_url:
+            QTimer.singleShot(250, self._sync_preview_url)
 
     def _editor_changed(self) -> None:
         if self._loading_editor or not self.current_file:
             return
 
         self.dirty = True
-        self.left_status.setText(f"{self.current_file.name}  •  sin guardar")
+        self.left_status.setText(f"{self.current_file.name}  •  escribiendo…")
         self.autosave_timer.start()
 
     def _autosave(self) -> None:
         self._save_current(silent=True)
 
-        if self.auto_btn.isChecked():
-            if not self.quarto.base_url:
-                self._ensure_preview()
-            else:
-                self.reload_timer.start()
+        # Quarto Preview watches files itself. Do not call reload() here.
+        # Its own live-reload script updates an open Preview dialog after
+        # Quarto has finished rebuilding the page.
+        if self.auto_btn.isChecked() and not self.quarto.is_preview_running():
+            self._ensure_preview()
 
     def _save_current(self, _checked=False, silent: bool = False) -> None:
         if not self.current_file or not self.dirty:
@@ -479,46 +484,266 @@ class MainWindow(QMainWindow):
         self.editor.setTextCursor(cursor)
         self.editor.setFocus()
 
-    def _ensure_preview(self) -> None:
+    def _ensure_preview(self) -> bool:
         if not self.book.is_book():
             self._set_status("Abre una carpeta con un libro Quarto.")
-            return
+            return False
 
         try:
             self._save_current(silent=True)
             self.quarto.start_preview(self.project_root)
-            self._set_status("Preview automático activo")
+            self._set_preview_state(self.quarto.is_preview_running())
+            self._set_status("Quarto Preview activo")
+            return True
         except Exception as exc:
+            self._set_preview_state(False)
             QMessageBox.warning(self, "Quarto Preview", str(exc))
+            return False
 
     def _preview_ready(self, _base: str) -> None:
-        self._show_current_preview()
+        self._set_preview_state(True)
         self._set_status("Quarto Preview activo")
+        self._sync_preview_url()
 
-    def _show_current_preview(self) -> None:
-        url = self.quarto.url_for_source(self.current_file)
-        if url:
-            self.preview.setUrl(QUrl(url))
+    def _preview_stopped(self) -> None:
+        self._set_preview_state(False)
+        self._set_status("Quarto Preview detenido")
 
-    def _reload_preview(self) -> None:
-        if not self.quarto.base_url:
-            return
-
-        desired = self.quarto.url_for_source(self.current_file)
-        if desired and self.preview.url().toString() != desired:
-            self.preview.setUrl(QUrl(desired))
-        else:
-            self.preview.reload()
+    def _set_preview_state(self, running: bool) -> None:
+        self.preview_state.setText(
+            "● Preview activo" if running else "● Preview detenido"
+        )
+        self.preview_state.setObjectName(
+            "PreviewOn" if running else "PreviewOff"
+        )
+        self.preview_state.style().unpolish(self.preview_state)
+        self.preview_state.style().polish(self.preview_state)
+        self.preview_state.update()
 
     def _toggle_auto_preview(self, enabled: bool) -> None:
         if enabled:
             self._ensure_preview()
             return
 
-        self.reload_timer.stop()
-        self._set_status(
-            "Auto Preview pausado; usa Preview cuando quieras refrescar."
+        self.quarto.stop_preview()
+        self._set_preview_state(False)
+        self._set_status("Auto Preview pausado")
+
+    def _show_preview_dialog(self) -> None:
+        if not self.book.is_book():
+            QMessageBox.information(
+                self,
+                "Preview",
+                "Abre primero un proyecto Quarto Book.",
+            )
+            return
+
+        if not self.quarto.is_preview_running():
+            if not self.auto_btn.isChecked():
+                self.auto_btn.setChecked(True)
+            elif not self._ensure_preview():
+                return
+
+        if self.preview_dialog:
+            self._sync_preview_url()
+            self.preview_dialog.show()
+            self.preview_dialog.raise_()
+            self.preview_dialog.activateWindow()
+            return
+
+        dialog = self._new_dialog("ArchiTecQuart — Preview", 0.88)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        top = QHBoxLayout()
+        title = QLabel("Vista previa del libro")
+        title.setObjectName("SectionTitle")
+
+        state = QLabel("● Quarto activo")
+        state.setObjectName("PreviewOn")
+
+        reload_btn = QPushButton("↻ Recargar")
+        reload_btn.clicked.connect(
+            lambda: self.preview_view.reload() if self.preview_view else None
         )
+
+        external_btn = QPushButton("↗ Navegador")
+        external_btn.clicked.connect(self._open_preview_external)
+
+        close_btn = QPushButton("Cerrar")
+        close_btn.clicked.connect(dialog.close)
+
+        top.addWidget(title)
+        top.addWidget(state)
+        top.addStretch(1)
+        top.addWidget(reload_btn)
+        top.addWidget(external_btn)
+        top.addWidget(close_btn)
+        layout.addLayout(top)
+
+        view = QWebEngineView()
+        view.setZoomFactor(0.90 if self.compact else 1.0)
+        view.setHtml(
+            "<html><body style='font-family:sans-serif;padding:32px;color:#64748b'>"
+            "<h2>Preparando vista previa…</h2>"
+            "<p>Quarto Preview está ejecutándose.</p>"
+            "</body></html>"
+        )
+        layout.addWidget(view, 1)
+
+        self.preview_dialog = dialog
+        self.preview_view = view
+
+        def cleanup(*_args) -> None:
+            self.preview_dialog = None
+            self.preview_view = None
+
+        dialog.destroyed.connect(cleanup)
+        self._sync_preview_url()
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _sync_preview_url(self) -> None:
+        if not self.preview_view or not self.quarto.base_url:
+            return
+
+        desired = self.quarto.url_for_source(self.current_file)
+        if desired and self.preview_view.url().toString() != desired:
+            self.preview_view.setUrl(QUrl(desired))
+
+    def _show_bibliography_dialog(self) -> None:
+        self._refresh_bibliography()
+
+        if self.bib_dialog:
+            self.bib_dialog.show()
+            self.bib_dialog.raise_()
+            self.bib_dialog.activateWindow()
+            return
+
+        dialog = self._new_dialog("ArchiTecQuart — Bibliografía", 0.80)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(7)
+
+        top = QHBoxLayout()
+        title = QLabel("Bibliografía del libro")
+        title.setObjectName("SectionTitle")
+        count = QLabel(f"{len(self.bib_entries)} referencias")
+        count.setObjectName("Muted")
+        close_btn = QPushButton("Cerrar")
+        close_btn.clicked.connect(dialog.close)
+
+        top.addWidget(title)
+        top.addWidget(count)
+        top.addStretch(1)
+        top.addWidget(close_btn)
+        layout.addLayout(top)
+
+        table = QTableWidget(0, 5)
+        table.setHorizontalHeaderLabels(
+            ["Clave", "Autor", "Título", "Año", "Tipo"]
+        )
+        table.horizontalHeader().setStretchLastSection(True)
+        table.verticalHeader().setVisible(False)
+
+        for entry in self.bib_entries:
+            row = table.rowCount()
+            table.insertRow(row)
+            for col, key in enumerate(
+                ["key", "author", "title", "year", "type"]
+            ):
+                table.setItem(
+                    row,
+                    col,
+                    QTableWidgetItem(entry.get(key, "")),
+                )
+
+        layout.addWidget(table, 1)
+        self.bib_dialog = dialog
+
+        def cleanup(*_args) -> None:
+            self.bib_dialog = None
+
+        dialog.destroyed.connect(cleanup)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _show_logs_dialog(self) -> None:
+        if self.logs_dialog:
+            self.logs_dialog.show()
+            self.logs_dialog.raise_()
+            self.logs_dialog.activateWindow()
+            return
+
+        dialog = self._new_dialog("ArchiTecQuart — Logs", 0.78)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(7)
+
+        top = QHBoxLayout()
+        title = QLabel("Quarto / ArchiTecQuart")
+        title.setObjectName("SectionTitle")
+
+        clear_btn = QPushButton("Limpiar")
+        close_btn = QPushButton("Cerrar")
+        close_btn.clicked.connect(dialog.close)
+
+        top.addWidget(title)
+        top.addStretch(1)
+        top.addWidget(clear_btn)
+        top.addWidget(close_btn)
+        layout.addLayout(top)
+
+        view = QPlainTextEdit()
+        view.setReadOnly(True)
+        view.setMaximumBlockCount(1500)
+        view.setPlainText("\n".join(self.log_lines))
+        layout.addWidget(view, 1)
+
+        def clear_logs() -> None:
+            self.log_lines.clear()
+            view.clear()
+
+        clear_btn.clicked.connect(clear_logs)
+
+        self.logs_dialog = dialog
+        self.logs_view = view
+
+        def cleanup(*_args) -> None:
+            self.logs_dialog = None
+            self.logs_view = None
+
+        dialog.destroyed.connect(cleanup)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _show_terminal_dialog(self) -> None:
+        if self.terminal_dialog:
+            self.terminal_dialog.show()
+            self.terminal_dialog.raise_()
+            self.terminal_dialog.activateWindow()
+            return
+
+        dialog = self._new_dialog("ArchiTecQuart — Terminal", 0.78)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        terminal = TerminalWidget(str(self.project_root))
+        layout.addWidget(terminal, 1)
+
+        self.terminal_dialog = dialog
+
+        def cleanup(*_args) -> None:
+            self.terminal_dialog = None
+
+        dialog.destroyed.connect(cleanup)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _render(self, target: str | None) -> None:
         if not self.book.is_book():
@@ -532,15 +757,12 @@ class MainWindow(QMainWindow):
         try:
             self._save_current(silent=True)
             self.quarto.render(self.project_root, target)
-            self.bottom_tabs.setCurrentIndex(1)
             self._set_status(f"Renderizando {target or 'proyecto'}…")
         except Exception as exc:
             QMessageBox.warning(self, "Render", str(exc))
 
-    def _render_finished(self, ok: bool, message: str) -> None:
+    def _render_finished(self, _ok: bool, message: str) -> None:
         self._set_status(message)
-        if ok and self.auto_btn.isChecked():
-            self.reload_timer.start(500)
 
     def _choose_project(self) -> None:
         folder = QFileDialog.getExistingDirectory(
@@ -548,6 +770,7 @@ class MainWindow(QMainWindow):
             "Abrir libro Quarto",
             str(self.project_root),
         )
+
         if folder:
             self._load_project(Path(folder))
 
@@ -578,32 +801,30 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Nuevo capítulo", str(exc))
 
     def _refresh_bibliography(self) -> None:
-        entries = []
+        entries: list[dict[str, str]] = []
+
         for path in self.book.bibliography_files():
             entries.extend(parse_bib_file(path))
 
-        self.bib_table.setRowCount(0)
-
-        for entry in entries:
-            row = self.bib_table.rowCount()
-            self.bib_table.insertRow(row)
-
-            for col, key in enumerate(
-                ["key", "author", "title", "year", "type"]
-            ):
-                self.bib_table.setItem(
-                    row,
-                    col,
-                    QTableWidgetItem(entry.get(key, "")),
-                )
+        self.bib_entries = entries
 
     def _open_preview_external(self) -> None:
+        if not self.quarto.is_preview_running():
+            if not self._ensure_preview():
+                return
+
         url = self.quarto.url_for_source(self.current_file)
         if url:
             QDesktopServices.openUrl(QUrl(url))
 
     def _append_log(self, text: str) -> None:
-        self.logs.appendPlainText(text)
+        self.log_lines.append(text)
+
+        if len(self.log_lines) > 1500:
+            self.log_lines = self.log_lines[-1500:]
+
+        if self.logs_view:
+            self.logs_view.appendPlainText(text)
 
     def _set_status(self, text: str) -> None:
         self.left_status.setText(text)
