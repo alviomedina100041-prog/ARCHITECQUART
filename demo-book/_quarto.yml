@@ -1,0 +1,21 @@
+project:
+  type: book
+
+book:
+  title: "Mi Libro de Investigación"
+  author: "Eduardo Jose Medina"
+  chapters:
+    - index.qmd
+    - 01-introduccion.qmd
+    - part: "Desarrollo"
+      chapters:
+        - 02-marco-teorico.qmd
+        - 03-metodologia.qmd
+    - 04-conclusiones.qmd
+
+bibliography: references.bib
+
+format:
+  html:
+    theme: cosmo
+  epub: default
