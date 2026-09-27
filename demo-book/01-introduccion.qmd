@@ -1,0 +1,18 @@
+# Introducción
+
+La escritura técnica puede ser cómoda sin dejar de utilizar archivos **Quarto** reales.
+
+## Objetivos
+
+- Escribir capítulos en archivos QMD.
+- Ver los cambios sin ejecutar manualmente Quarto cada vez.
+- Mantener compatibilidad con HTML, PDF y EPUB.
+- Trabajar con bibliografía y referencias cruzadas.
+
+Una referencia de ejemplo es [@quarto2026].
+
+::: {.callout-note}
+## Auto Preview
+
+ArchiTecQuart inicia Quarto Preview una sola vez. Después guarda con debounce y recarga la vista.
+:::
