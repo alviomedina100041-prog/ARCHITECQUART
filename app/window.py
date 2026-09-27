@@ -3,15 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, QUrl
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
+    QFileSystemModel,
     QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -19,9 +21,11 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QSplitter,
     QStackedWidget,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
+    QTreeView,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -122,7 +126,24 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(5)
 
-        title = QLabel("▣  ArchiTecQuart")
+        icon_label = QLabel()
+        icon_path = Path(__file__).resolve().parent.parent / "assets" / "icon.png"
+        if icon_path.exists():
+            pixmap = QPixmap(str(icon_path))
+            if not pixmap.isNull():
+                icon_label.setPixmap(
+                    pixmap.scaled(
+                        26,
+                        26,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    )
+                )
+        icon_label.setFixedSize(30, 30)
+        icon_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(icon_label)
+
+        title = QLabel("ArchiTecQuart")
         title.setObjectName("AppTitle")
         layout.addWidget(title)
 
@@ -135,6 +156,10 @@ class MainWindow(QMainWindow):
         self.preview_state = QLabel("● Preview detenido")
         self.preview_state.setObjectName("PreviewOff")
         layout.addWidget(self.preview_state)
+
+        new_book_btn = QPushButton("+ Libro")
+        new_book_btn.setToolTip("Crear un libro Quarto nuevo")
+        new_book_btn.clicked.connect(self._new_book)
 
         open_btn = QPushButton("Abrir")
         open_btn.clicked.connect(self._choose_project)
@@ -191,6 +216,7 @@ class MainWindow(QMainWindow):
         export_btn.setPopupMode(QToolButton.InstantPopup)
 
         for widget in [
+            new_book_btn,
             open_btn,
             new_btn,
             save_btn,
@@ -211,17 +237,25 @@ class MainWindow(QMainWindow):
         frame.setObjectName("SidePanel")
 
         if self.compact:
-            frame.setMinimumWidth(250)
-            frame.setMaximumWidth(340)
+            frame.setMinimumWidth(270)
+            frame.setMaximumWidth(360)
         else:
-            frame.setMinimumWidth(280)
-            frame.setMaximumWidth(390)
+            frame.setMinimumWidth(300)
+            frame.setMaximumWidth(420)
 
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(9, 9, 9, 9)
         layout.setSpacing(7)
 
-        header = QHBoxLayout()
+        self.left_tabs = QTabWidget()
+        self.left_tabs.setDocumentMode(True)
+
+        book_page = QWidget()
+        book_layout = QVBoxLayout(book_page)
+        book_layout.setContentsMargins(2, 2, 2, 2)
+        book_layout.setSpacing(6)
+
+        book_header = QHBoxLayout()
         title = QLabel("Estructura del libro")
         title.setObjectName("SectionTitle")
 
@@ -230,15 +264,57 @@ class MainWindow(QMainWindow):
         add_btn.setToolTip("Nuevo capítulo")
         add_btn.clicked.connect(self._new_chapter)
 
-        header.addWidget(title)
-        header.addStretch(1)
-        header.addWidget(add_btn)
-        layout.addLayout(header)
+        book_header.addWidget(title)
+        book_header.addStretch(1)
+        book_header.addWidget(add_btn)
+        book_layout.addLayout(book_header)
 
         self.book_tree = QTreeWidget()
         self.book_tree.setHeaderHidden(True)
         self.book_tree.itemClicked.connect(self._tree_item_clicked)
-        layout.addWidget(self.book_tree, 1)
+        book_layout.addWidget(self.book_tree, 1)
+
+        files_page = QWidget()
+        files_layout = QVBoxLayout(files_page)
+        files_layout.setContentsMargins(2, 2, 2, 2)
+        files_layout.setSpacing(6)
+
+        file_header = QHBoxLayout()
+        self.files_path_label = QLabel(str(Path.home()))
+        self.files_path_label.setObjectName("Muted")
+        self.files_path_label.setToolTip(str(Path.home()))
+
+        home_btn = QPushButton("Home")
+        home_btn.setFixedWidth(52)
+        home_btn.clicked.connect(self._show_home_files)
+
+        project_btn = QPushButton("Proyecto")
+        project_btn.setFixedWidth(65)
+        project_btn.clicked.connect(self._show_project_files)
+
+        file_header.addWidget(self.files_path_label, 1)
+        file_header.addWidget(home_btn)
+        file_header.addWidget(project_btn)
+        files_layout.addLayout(file_header)
+
+        self.file_model = QFileSystemModel(self)
+        self.file_model.setReadOnly(True)
+        self.file_model.setRootPath(str(Path.home()))
+
+        self.file_tree = QTreeView()
+        self.file_tree.setModel(self.file_model)
+        self.file_tree.setRootIndex(self.file_model.index(str(Path.home())))
+        self.file_tree.setHeaderHidden(True)
+        self.file_tree.setAnimated(True)
+        self.file_tree.setIndentation(16)
+        for column in range(1, 4):
+            self.file_tree.hideColumn(column)
+        self.file_tree.doubleClicked.connect(self._file_tree_double_clicked)
+        files_layout.addWidget(self.file_tree, 1)
+
+        self.left_tabs.addTab(book_page, "Libro")
+        self.left_tabs.addTab(files_page, "Archivos")
+        layout.addWidget(self.left_tabs, 1)
 
         return frame
 
@@ -510,6 +586,127 @@ class MainWindow(QMainWindow):
         self.terminal_widget = None
         self.terminal_placeholder.show()
 
+    def _new_book(self) -> None:
+        parent = QFileDialog.getExistingDirectory(
+            self,
+            "Dónde crear el nuevo libro",
+            str(Path.home()),
+        )
+        if not parent:
+            return
+
+        title, ok = QInputDialog.getText(
+            self,
+            "Nuevo libro Quarto",
+            "Título del libro:",
+        )
+        if not ok or not title.strip():
+            return
+
+        default_folder = BookModel.slugify(title.strip()) or "mi-libro-quarto"
+        folder_name, ok = QInputDialog.getText(
+            self,
+            "Carpeta del libro",
+            "Nombre de la carpeta:",
+            QLineEdit.Normal,
+            default_folder,
+        )
+        if not ok or not folder_name.strip():
+            return
+
+        author, ok = QInputDialog.getText(
+            self,
+            "Autor",
+            "Autor (opcional):",
+        )
+        if not ok:
+            return
+
+        try:
+            root = BookModel.create_book(
+                parent=parent,
+                title=title.strip(),
+                author=author.strip(),
+                folder_name=folder_name.strip(),
+            )
+        except FileExistsError as exc:
+            QMessageBox.warning(self, "La carpeta ya existe", str(exc))
+            return
+        except Exception as exc:
+            QMessageBox.warning(self, "No se pudo crear el libro", str(exc))
+            return
+
+        self._load_project(root)
+        self.left_tabs.setCurrentIndex(0)
+
+        intro = root / "01-introduccion.qmd"
+        if intro.exists():
+            self._open_file(intro)
+
+        self._append_log(f"Libro creado: {root}")
+        QMessageBox.information(
+            self,
+            "Libro creado",
+            f"Tu libro Quarto fue creado en:\n{root}",
+        )
+
+    def _show_files_root(self, root: Path) -> None:
+        root = root.expanduser().resolve()
+        if not root.exists():
+            return
+        self.file_model.setRootPath(str(root))
+        self.file_tree.setRootIndex(self.file_model.index(str(root)))
+        display = str(root)
+        home = str(Path.home())
+        if display == home:
+            display = "~"
+        elif display.startswith(home + "/"):
+            display = "~" + display[len(home):]
+        self.files_path_label.setText(display)
+        self.files_path_label.setToolTip(str(root))
+
+    def _show_home_files(self) -> None:
+        self._show_files_root(Path.home())
+        self.left_tabs.setCurrentIndex(1)
+
+    def _show_project_files(self) -> None:
+        self._show_files_root(self.project_root)
+        self.left_tabs.setCurrentIndex(1)
+
+    def _find_book_root(self, path: Path) -> Path | None:
+        candidate = path if path.is_dir() else path.parent
+        home = Path.home().resolve()
+
+        while True:
+            if (candidate / "_quarto.yml").exists():
+                return candidate
+            if candidate == candidate.parent:
+                break
+            if candidate == home.parent:
+                break
+            candidate = candidate.parent
+
+        return None
+
+    def _file_tree_double_clicked(self, index) -> None:
+        path = Path(self.file_model.filePath(index))
+        if path.is_dir():
+            return
+
+        if path.name == "_quarto.yml":
+            self._load_project(path.parent)
+            self.left_tabs.setCurrentIndex(0)
+            return
+
+        if path.suffix.lower() != ".qmd":
+            return
+
+        root = self._find_book_root(path)
+        if root and root != self.project_root:
+            self._load_project(root)
+
+        self._open_file(path)
+
     def _load_project(self, root: Path) -> None:
         self._save_current(silent=True)
         self._hide_overlay()
@@ -526,7 +723,23 @@ class MainWindow(QMainWindow):
         self._loading_editor = False
 
         self.file_label.setText("Selecciona un capítulo")
-        self.project_label.setText(self.book.title())
+
+        if self.book.is_book():
+            self.project_label.setText(self.book.title())
+            self.project_label.setToolTip(str(self.project_root))
+            self.left_tabs.setCurrentIndex(0)
+        else:
+            display = str(self.project_root)
+            home = str(Path.home())
+            if display == home:
+                display = "~"
+            elif display.startswith(home + "/"):
+                display = "~" + display[len(home):]
+            self.project_label.setText(display)
+            self.project_label.setToolTip(str(self.project_root))
+            self.left_tabs.setCurrentIndex(1)
+
+        self._show_files_root(self.project_root if self.book.is_book() else Path.home()))
         self._refresh_tree()
         self._refresh_bibliography()
 
@@ -540,9 +753,13 @@ class MainWindow(QMainWindow):
         self.book_tree.clear()
 
         if not self.book.is_book():
-            item = QTreeWidgetItem(["No se encontró _quarto.yml"])
-            item.setFlags(Qt.NoItemFlags)
-            self.book_tree.addTopLevelItem(item)
+            create_item = QTreeWidgetItem(["+ Crear un libro Quarto"])
+            create_item.setData(0, Qt.UserRole, "__new_book__")
+            self.book_tree.addTopLevelItem(create_item)
+
+            help_item = QTreeWidgetItem(["Usa Archivos para navegar tu sistema"])
+            help_item.setFlags(Qt.NoItemFlags)
+            self.book_tree.addTopLevelItem(help_item)
             return
 
         index_file = self.project_root / "index.qmd"
@@ -576,6 +793,9 @@ class MainWindow(QMainWindow):
     def _tree_item_clicked(self, item: QTreeWidgetItem) -> None:
         value = item.data(0, Qt.UserRole)
         if not value:
+            return
+        if value == "__new_book__":
+            self._new_book()
             return
         if value == "__bibliography__":
             self._show_overlay("bibliography")
