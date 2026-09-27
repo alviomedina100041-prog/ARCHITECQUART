@@ -1,0 +1,7 @@
+# Metodología
+
+Este capítulo puede combinar texto, código, ecuaciones, figuras y referencias.
+
+$$
+E = mc^2
+$$
