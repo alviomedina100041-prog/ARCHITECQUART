@@ -32,6 +32,24 @@ QLabel#Muted {
     font-size: 10px;
 }
 
+QLabel#PreviewOn {
+    background: #dcfce7;
+    color: #166534;
+    border: 1px solid #86efac;
+    border-radius: 8px;
+    padding: 4px 9px;
+    font-weight: 700;
+}
+
+QLabel#PreviewOff {
+    background: #fee2e2;
+    color: #991b1b;
+    border: 1px solid #fca5a5;
+    border-radius: 8px;
+    padding: 4px 9px;
+    font-weight: 700;
+}
+
 QPushButton, QToolButton {
     background: #ffffff;
     color: #263449;
