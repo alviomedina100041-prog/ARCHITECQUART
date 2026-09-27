@@ -93,6 +93,76 @@ class BookModel:
             if isinstance(value, str)
         ]
 
+
+    @classmethod
+    def create_book(
+        cls,
+        parent: str | Path,
+        title: str,
+        author: str = "",
+        folder_name: str | None = None,
+    ) -> Path:
+        parent_path = Path(parent).expanduser().resolve()
+        parent_path.mkdir(parents=True, exist_ok=True)
+
+        folder = cls.slugify(folder_name or title) or "mi-libro-quarto"
+        root = parent_path / folder
+
+        if root.exists() and any(root.iterdir()):
+            raise FileExistsError(
+                f"La carpeta ya existe y no está vacía: {root}"
+            )
+
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "images").mkdir(exist_ok=True)
+
+        book_data: dict[str, Any] = {
+            "project": {"type": "book"},
+            "book": {
+                "title": title.strip() or "Mi libro",
+                "chapters": [
+                    "index.qmd",
+                    "01-introduccion.qmd",
+                ],
+            },
+            "bibliography": "references.bib",
+            "format": {
+                "html": {"theme": "cosmo"},
+                "epub": "default",
+            },
+        }
+
+        if author.strip():
+            book_data["book"]["author"] = author.strip()
+
+        (root / "_quarto.yml").write_text(
+            yaml.safe_dump(
+                book_data,
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        (root / "index.qmd").write_text(
+            f"# {title.strip() or 'Mi libro'}\n\n"
+            "Escribe aquí la portada o presentación de tu libro.\n",
+            encoding="utf-8",
+        )
+
+        (root / "01-introduccion.qmd").write_text(
+            "# Introducción\n\n"
+            "Comienza aquí el primer capítulo de tu libro.\n",
+            encoding="utf-8",
+        )
+
+        (root / "references.bib").write_text(
+            "% Referencias BibTeX del libro\n",
+            encoding="utf-8",
+        )
+
+        return root
+
     def add_chapter(self, title: str) -> Path:
         data = self.load_config()
         if not data:
