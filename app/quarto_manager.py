@@ -47,6 +47,12 @@ class QuartoManager(QObject):
             return None
         return f"http://127.0.0.1:{self.port}"
 
+    def is_preview_running(self) -> bool:
+        return bool(
+            self.preview_process
+            and self.preview_process.state() != QProcess.NotRunning
+        )
+
     def start_preview(self, project_root: str | Path) -> None:
         root = Path(project_root).resolve()
         path = self.quarto_path()
