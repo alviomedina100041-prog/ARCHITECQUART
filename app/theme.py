@@ -11,7 +11,8 @@ QFrame#TopBar,
 QFrame#SidePanel,
 QFrame#EditorPanel,
 QFrame#PreviewPanel,
-QFrame#StatusBar {
+QFrame#StatusBar,
+QFrame#OverlayCard {
     background: #ffffff;
     border: 1px solid #dfe5ee;
     border-radius: 9px;
@@ -30,6 +31,36 @@ QLabel#SectionTitle {
 QLabel#Muted {
     color: #708096;
     font-size: 10px;
+}
+
+QFrame#OverlayBackdrop {
+    background-color: rgba(15, 23, 42, 105);
+    border: none;
+}
+
+QFrame#OverlayCard {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 14px;
+}
+
+QLabel#OverlayTitle {
+    font-size: 15px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+QPushButton#OverlayClose {
+    background: #f8fafc;
+    color: #475569;
+    border: 1px solid #cbd5e1;
+    padding: 5px 10px;
+}
+
+QPushButton#OverlayClose:hover {
+    background: #fee2e2;
+    color: #991b1b;
+    border-color: #fca5a5;
 }
 
 QLabel#PreviewOn {
