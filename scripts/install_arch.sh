@@ -2,15 +2,22 @@
 set -euo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/architecquart"
-DESKTOP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+INSTALL_DIR="$DATA_HOME/architecquart"
+DESKTOP_DIR="$DATA_HOME/applications"
+ICON_DIR="$DATA_HOME/icons/hicolor/256x256/apps"
+SCALABLE_ICON_DIR="$DATA_HOME/icons/hicolor/scalable/apps"
 BIN_DIR="$HOME/.local/bin"
 STAGING="${INSTALL_DIR}.new"
 
 echo "== ArchiTecQuart Installer =="
 echo
 
-sudo pacman -S --needed python python-pip python-virtualenv
+sudo pacman -S --needed \
+    python \
+    python-pip \
+    python-virtualenv \
+    hicolor-icon-theme
 
 if ! command -v quarto >/dev/null 2>&1; then
     echo
@@ -21,7 +28,12 @@ if ! command -v quarto >/dev/null 2>&1; then
 fi
 
 rm -rf "$STAGING"
-mkdir -p "$STAGING" "$DESKTOP_DIR" "$BIN_DIR"
+mkdir -p \
+    "$STAGING" \
+    "$DESKTOP_DIR" \
+    "$ICON_DIR" \
+    "$SCALABLE_ICON_DIR" \
+    "$BIN_DIR"
 
 cp -a "$SOURCE_DIR/app" "$STAGING/"
 cp -a "$SOURCE_DIR/assets" "$STAGING/"
@@ -40,8 +52,15 @@ chmod +x "$STAGING/scripts/uninstall_arch.sh"
 rm -rf "$INSTALL_DIR"
 mv "$STAGING" "$INSTALL_DIR"
 
-sed "s|__PROJECT_DIR__|$INSTALL_DIR|g"     "$INSTALL_DIR/scripts/architecquart.desktop"     > "$DESKTOP_DIR/architecquart.desktop"
+sed "s|__PROJECT_DIR__|$INSTALL_DIR|g" \
+    "$INSTALL_DIR/scripts/architecquart.desktop" \
+    > "$DESKTOP_DIR/architecquart.desktop"
 chmod +x "$DESKTOP_DIR/architecquart.desktop"
+
+# Install the icon using the freedesktop icon-theme layout.
+# The desktop file can then use Icon=architecquart instead of an absolute SVG path.
+cp "$INSTALL_DIR/assets/icon.png" "$ICON_DIR/architecquart.png"
+cp "$INSTALL_DIR/assets/icon.svg" "$SCALABLE_ICON_DIR/architecquart.svg"
 
 cat > "$BIN_DIR/architecquart" <<EOF
 #!/usr/bin/env bash
@@ -53,7 +72,12 @@ if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$DESKTOP_DIR" || true
 fi
 
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -t "$DATA_HOME/icons/hicolor" || true
+fi
+
 echo
 echo "Instalado en: $INSTALL_DIR"
+echo "Icono instalado como: architecquart"
 echo "Busca 'ArchiTecQuart' en el menú de aplicaciones."
 echo "También puedes ejecutar: architecquart"
