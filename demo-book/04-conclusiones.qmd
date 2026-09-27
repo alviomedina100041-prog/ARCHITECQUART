@@ -1,0 +1,3 @@
+# Conclusiones
+
+ArchiTecQuart es una capa de escritorio sobre el flujo real de Quarto.
