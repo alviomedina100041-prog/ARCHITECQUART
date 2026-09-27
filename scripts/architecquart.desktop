@@ -10,4 +10,4 @@ Icon=architecquart
 Terminal=false
 Categories=Office;Development;Education;
 StartupNotify=true
-StartupWMClass=ArchiTecQuart
+StartupWMClass=architecquart
