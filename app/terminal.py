@@ -81,3 +81,14 @@ class TerminalWidget(QWidget):
         self.output.appendPlainText(f"$ {command}")
         self.process.write((command + "\n").encode())
         self.input.clear()
+
+    def shutdown(self) -> None:
+        if self.process.state() != QProcess.NotRunning:
+            self.process.terminate()
+            if not self.process.waitForFinished(800):
+                self.process.kill()
+                self.process.waitForFinished(500)
+
+    def closeEvent(self, event) -> None:
+        self.shutdown()
+        super().closeEvent(event)
