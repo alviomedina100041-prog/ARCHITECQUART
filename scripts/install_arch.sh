@@ -59,6 +59,7 @@ chmod +x "$DESKTOP_DIR/architecquart.desktop"
 
 # Install the icon using the freedesktop icon-theme layout.
 # The desktop file can then use Icon=architecquart instead of an absolute SVG path.
+rm -f "$ICON_DIR/architecquart.png" "$SCALABLE_ICON_DIR/architecquart.svg"
 cp "$INSTALL_DIR/assets/icon.png" "$ICON_DIR/architecquart.png"
 cp "$INSTALL_DIR/assets/icon.svg" "$SCALABLE_ICON_DIR/architecquart.svg"
 
@@ -74,6 +75,12 @@ fi
 
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
     gtk-update-icon-cache -f -t "$DATA_HOME/icons/hicolor" || true
+fi
+
+if command -v kbuildsycoca6 >/dev/null 2>&1; then
+    kbuildsycoca6 --noincremental || true
+elif command -v kbuildsycoca5 >/dev/null 2>&1; then
+    kbuildsycoca5 --noincremental || true
 fi
 
 echo
