@@ -32,11 +32,11 @@ Tus proyectos siguen siendo proyectos Quarto normales y pueden abrirse también 
 La primera interfaz está ajustada especialmente para laptops con resolución aproximada de 1366 × 780:
 
 - barra superior compacta;
-- árbol del libro de alrededor de 220 px;
-- editor central con prioridad de espacio;
-- preview embebido a la derecha;
-- panel inferior redimensionable;
-- zoom de preview reducido automáticamente;
+- árbol del libro más ancho y fácil de leer;
+- editor central usando casi todo el espacio disponible;
+- sin preview lateral permanente;
+- sin panel inferior ocupando altura;
+- Preview, Bibliografía, Logs y Terminal como ventanas emergentes;
 - botones y tipografías compactas.
 
 En pantallas más grandes la distribución se expande automáticamente.
@@ -52,7 +52,7 @@ El flujo es:
 ~~~text
 Escribes en el capítulo
         ↓
-900 ms sin cambios
+2.5 s sin cambios
         ↓
 Auto-guardado del archivo QMD
         ↓
@@ -60,7 +60,7 @@ Quarto Preview ya sigue ejecutándose
         ↓
 Quarto detecta el cambio
         ↓
-La vista embebida se recarga
+Su live reload actualiza el Preview abierto
 ~~~
 
 El proceso de Quarto Preview se inicia una sola vez y permanece activo mientras trabajas.
@@ -106,11 +106,14 @@ El botón + Capítulo crea un nuevo archivo QMD y lo agrega automáticamente a l
 
 La vista previa utiliza Quarto Preview real mediante un proceso persistente.
 
-- no abre una pestaña normal del navegador;
-- se muestra dentro de Qt WebEngine;
+- no ocupa espacio permanentemente en la ventana principal;
+- se abre en una ventana Qt WebEngine encima de ArchiTecQuart;
+- se puede cerrar sin detener necesariamente tu aplicación;
 - sigue el capítulo que estás editando;
-- puede recargarse manualmente;
-- también puede abrirse en el navegador externo.
+- utiliza el live reload propio de Quarto;
+- sólo se fuerza una recarga cuando tú pulsas Recargar;
+- también puede abrirse en el navegador externo;
+- un indicador verde/rojo muestra si Quarto Preview está ejecutándose.
 
 ### Render y exportación
 
@@ -126,7 +129,7 @@ PDF sigue dependiendo de que tu instalación de Quarto tenga las herramientas ne
 
 ### Bibliografía
 
-ArchiTecQuart detecta los archivos BibTeX configurados en _quarto.yml y muestra una tabla con:
+El botón Biblio abre una ventana grande independiente. ArchiTecQuart detecta los archivos BibTeX configurados en _quarto.yml y muestra una tabla con:
 
 - clave;
 - autor;
@@ -136,11 +139,11 @@ ArchiTecQuart detecta los archivos BibTeX configurados en _quarto.yml y muestra 
 
 ### Logs
 
-La pestaña Logs muestra en vivo la salida de Quarto Preview y Quarto Render.
+El botón Logs abre una ventana emergente con la salida en vivo de Quarto Preview y Quarto Render.
 
 ### Terminal
 
-La aplicación incluye una terminal Bash ligera para comandos rápidos dentro del proyecto.
+El botón Terminal abre una terminal Bash ligera en una ventana separada para comandos rápidos dentro del proyecto.
 
 ## Arquitectura
 
@@ -148,12 +151,14 @@ La aplicación incluye una terminal Bash ligera para comandos rápidos dentro de
 ┌────────────────────────────────────────────────────┐
 │                 ArchiTecQuart                      │
 │               PySide6 / Qt                        │
-├──────────────┬──────────────────┬──────────────────┤
-│ Estructura   │ Editor QMD       │ Qt WebEngine     │
-│ del libro    │                  │ Preview HTML     │
-├──────────────┴──────────────────┴──────────────────┤
-│ Bibliografía       Logs       Terminal             │
-└───────────────────────────┬────────────────────────┘
+├──────────────────┬───────────────────────────────┤
+│ Estructura        │ Editor QMD grande             │
+│ del libro         │                               │
+└──────────────────┴───────────────┬───────────────┘
+                                   │
+          ┌────────────────────────┼─────────────────────┐
+          │                        │                     │
+     Preview popup           Bibliografía/Logs     Terminal popup
                             │
                        Quarto CLI
                     ┌───────┴────────┐
@@ -271,6 +276,7 @@ ARCHITECQUART/
 │
 ├── assets/
 │   ├── icon.svg
+│   ├── icon.png
 │   └── mockup.svg
 │
 ├── demo-book/
