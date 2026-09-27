@@ -1,0 +1,9 @@
+# Marco teórico
+
+## Quarto
+
+Quarto utiliza Markdown y Pandoc para generar publicaciones reproducibles.
+
+## Estructura
+
+La estructura del libro se conserva en el archivo `_quarto.yml`.
