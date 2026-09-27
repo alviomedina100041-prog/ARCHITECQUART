@@ -38,11 +38,12 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("ArchiTecQuart")
     app.setOrganizationName("EduardoMedinaLabs")
+    app.setDesktopFileName("architecquart")
     app.setStyle("Fusion")
 
     icon_path = Path(__file__).resolve().parent.parent / "assets" / "icon.png"
-    if icon_path.exists():
-        app.setWindowIcon(QIcon(str(icon_path)))
+    fallback_icon = QIcon(str(icon_path)) if icon_path.exists() else QIcon()
+    app.setWindowIcon(QIcon.fromTheme("architecquart", fallback_icon))
 
     window = MainWindow(resolve_project())
     window.show()
