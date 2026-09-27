@@ -509,6 +509,14 @@ class MainWindow(QMainWindow):
         self._set_preview_state(False)
         self._set_status("Quarto Preview detenido")
 
+        if self.preview_view:
+            self.preview_view.setHtml(
+                "<html><body style='font-family:sans-serif;padding:32px;color:#64748b'>"
+                "<h2>Preview detenido</h2>"
+                "<p>Activa Auto o vuelve a abrir Preview para iniciar Quarto.</p>"
+                "</body></html>"
+            )
+
     def _set_preview_state(self, running: bool) -> None:
         self.preview_state.setText(
             "● Preview activo" if running else "● Preview detenido"
@@ -540,8 +548,11 @@ class MainWindow(QMainWindow):
 
         if not self.quarto.is_preview_running():
             if not self.auto_btn.isChecked():
+                self.auto_btn.blockSignals(True)
                 self.auto_btn.setChecked(True)
-            elif not self._ensure_preview():
+                self.auto_btn.blockSignals(False)
+
+            if not self._ensure_preview():
                 return
 
         if self.preview_dialog:
