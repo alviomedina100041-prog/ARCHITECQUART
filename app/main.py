@@ -19,6 +19,7 @@ def configure_graphics() -> None:
 
 configure_graphics()
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from .window import MainWindow
@@ -38,6 +39,10 @@ def main() -> int:
     app.setApplicationName("ArchiTecQuart")
     app.setOrganizationName("EduardoMedinaLabs")
     app.setStyle("Fusion")
+
+    icon_path = Path(__file__).resolve().parent.parent / "assets" / "icon.png"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     window = MainWindow(resolve_project())
     window.show()
