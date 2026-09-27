@@ -739,7 +739,9 @@ class MainWindow(QMainWindow):
             self.project_label.setToolTip(str(self.project_root))
             self.left_tabs.setCurrentIndex(1)
 
-        self._show_files_root(self.project_root if self.book.is_book() else Path.home()))
+        self._show_files_root(
+            self.project_root if self.book.is_book() else Path.home()
+        )
         self._refresh_tree()
         self._refresh_bibliography()
 
