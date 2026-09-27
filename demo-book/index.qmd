@@ -1,0 +1,5 @@
+# Mi Libro de Investigación
+
+Bienvenido a este libro de demostración para **ArchiTecQuart**.
+
+Este proyecto sirve para probar el editor, el árbol del libro y el preview persistente.
