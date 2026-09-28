@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -174,8 +173,8 @@ class MainWindow(QMainWindow):
         open_btn.clicked.connect(self._choose_project)
 
         new_btn = QPushButton("+ Cap.")
-        new_btn.setToolTip("Nuevo capítulo")
-        new_btn.clicked.connect(self._new_chapter)
+        new_btn.setToolTip("Crear un capítulo nuevo")
+        new_btn.clicked.connect(lambda: self._show_overlay("new_chapter"))
 
         save_btn = QPushButton("Guardar")
         save_btn.clicked.connect(self._save_current)
@@ -262,6 +261,7 @@ class MainWindow(QMainWindow):
         books_title.setObjectName("SectionTitle")
 
         new_book_btn = QPushButton("+ Nuevo")
+        new_book_btn.setObjectName("SoftPrimary")
         new_book_btn.setToolTip("Crear un libro Quarto")
         new_book_btn.clicked.connect(lambda: self._show_overlay("new_book"))
 
@@ -281,6 +281,10 @@ class MainWindow(QMainWindow):
         self.books_list.itemDoubleClicked.connect(self._recent_book_activated)
         layout.addWidget(self.books_list)
 
+        books_hint = QLabel("Doble clic en un libro para abrirlo")
+        books_hint.setObjectName("FieldHint")
+        layout.addWidget(books_hint)
+
         chapters_header = QHBoxLayout()
         chapters_title = QLabel("Capítulos")
         chapters_title.setObjectName("SectionTitle")
@@ -288,7 +292,7 @@ class MainWindow(QMainWindow):
         add_chapter_btn = QPushButton("+")
         add_chapter_btn.setFixedWidth(30)
         add_chapter_btn.setToolTip("Nuevo capítulo")
-        add_chapter_btn.clicked.connect(self._new_chapter)
+        add_chapter_btn.clicked.connect(lambda: self._show_overlay("new_chapter"))
 
         chapters_header.addWidget(chapters_title)
         chapters_header.addStretch(1)
@@ -329,6 +333,7 @@ class MainWindow(QMainWindow):
 
         for label, text in tools:
             button = QPushButton(label)
+            button.setObjectName("EditorTool")
             button.clicked.connect(
                 lambda _checked=False, value=text: self._insert_text(value)
             )
@@ -359,12 +364,14 @@ class MainWindow(QMainWindow):
         self.preview_panel_state.setObjectName("PreviewOff")
 
         reload_btn = QPushButton("↻")
-        reload_btn.setFixedWidth(30)
+        reload_btn.setObjectName("IconButton")
+        reload_btn.setFixedWidth(32)
         reload_btn.setToolTip("Recargar la vista previa")
         reload_btn.clicked.connect(lambda: self.preview_view.reload())
 
         hide_btn = QPushButton("×")
-        hide_btn.setFixedWidth(30)
+        hide_btn.setObjectName("IconButton")
+        hide_btn.setFixedWidth(32)
         hide_btn.setToolTip("Ocultar vista previa")
         hide_btn.clicked.connect(self._toggle_preview_panel)
 
@@ -427,14 +434,23 @@ class MainWindow(QMainWindow):
         card_layout.setSpacing(8)
 
         header = QHBoxLayout()
+        overlay_heading = QVBoxLayout()
+        overlay_heading.setSpacing(1)
+
         self.overlay_title = QLabel("Herramienta")
         self.overlay_title.setObjectName("OverlayTitle")
+
+        self.overlay_subtitle = QLabel("")
+        self.overlay_subtitle.setObjectName("OverlaySubtitle")
+
+        overlay_heading.addWidget(self.overlay_title)
+        overlay_heading.addWidget(self.overlay_subtitle)
 
         close_btn = QPushButton("✕ Cerrar")
         close_btn.setObjectName("OverlayClose")
         close_btn.clicked.connect(self._hide_overlay)
 
-        header.addWidget(self.overlay_title)
+        header.addLayout(overlay_heading)
         header.addStretch(1)
         header.addWidget(close_btn)
         card_layout.addLayout(header)
@@ -443,11 +459,13 @@ class MainWindow(QMainWindow):
         card_layout.addWidget(self.overlay_stack, 1)
 
         self.new_book_page = self._build_new_book_page()
+        self.new_chapter_page = self._build_new_chapter_page()
         self.bibliography_page = self._build_bibliography_page()
         self.logs_page = self._build_logs_page()
         self.terminal_page = self._build_terminal_page()
 
         self.overlay_stack.addWidget(self.new_book_page)
+        self.overlay_stack.addWidget(self.new_chapter_page)
         self.overlay_stack.addWidget(self.bibliography_page)
         self.overlay_stack.addWidget(self.logs_page)
         self.overlay_stack.addWidget(self.terminal_page)
@@ -456,64 +474,118 @@ class MainWindow(QMainWindow):
 
     def _build_new_book_page(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(18, 12, 18, 18)
-        layout.setSpacing(12)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(22, 18, 22, 22)
+        page_layout.addStretch(1)
 
-        intro = QLabel(
-            "Crea un proyecto Quarto Book nuevo. "
-            "ArchiTecQuart generará la estructura inicial automáticamente."
+        surface = QFrame()
+        surface.setObjectName("FormSurface")
+        surface.setMaximumWidth(720)
+
+        layout = QVBoxLayout(surface)
+        layout.setContentsMargins(26, 24, 26, 24)
+        layout.setSpacing(10)
+
+        title = QLabel("Crea tu libro")
+        title.setObjectName("FormTitle")
+        subtitle = QLabel(
+            "ArchiTecQuart preparará un proyecto Quarto listo para escribir, "
+            "previsualizar y exportar."
         )
-        intro.setWordWrap(True)
-        intro.setObjectName("Muted")
-        layout.addWidget(intro)
+        subtitle.setObjectName("FormSubtitle")
+        subtitle.setWordWrap(True)
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addSpacing(8)
 
         title_label = QLabel("Título del libro")
-        title_label.setObjectName("SectionTitle")
+        title_label.setObjectName("FieldLabel")
         self.new_book_title = QLineEdit()
-        self.new_book_title.setPlaceholderText("Ej. Mi libro de investigación")
+        self.new_book_title.setObjectName("FormInput")
+        self.new_book_title.setPlaceholderText("Ej. Reporte de residencia profesional")
         self.new_book_title.textChanged.connect(self._suggest_book_folder)
 
+        title_hint = QLabel("Este será el título principal que mostrará Quarto.")
+        title_hint.setObjectName("FieldHint")
+
         author_label = QLabel("Autor")
-        author_label.setObjectName("SectionTitle")
+        author_label.setObjectName("FieldLabel")
         self.new_book_author = QLineEdit()
-        self.new_book_author.setPlaceholderText("Opcional")
+        self.new_book_author.setObjectName("FormInput")
+        self.new_book_author.setPlaceholderText("Nombre del autor (opcional)")
 
-        folder_label = QLabel("Nombre de la carpeta")
-        folder_label.setObjectName("SectionTitle")
+        folder_label = QLabel("Nombre interno")
+        folder_label.setObjectName("FieldLabel")
         self.new_book_folder = QLineEdit()
+        self.new_book_folder.setObjectName("FormInput")
         self.new_book_folder.setPlaceholderText("mi-libro")
+        folder_hint = QLabel(
+            "Se usa únicamente como nombre de la carpeta del proyecto."
+        )
+        folder_hint.setObjectName("FieldHint")
 
-        location_label = QLabel("Guardar en")
-        location_label.setObjectName("SectionTitle")
+        location_label = QLabel("Ubicación")
+        location_label.setObjectName("FieldLabel")
 
         location_row = QHBoxLayout()
+        location_row.setSpacing(8)
         default_parent = Path.home() / "Documents"
         if not default_parent.exists():
             default_parent = Path.home()
         self.new_book_parent = default_parent
 
         self.new_book_location = QLineEdit(str(self.new_book_parent))
+        self.new_book_location.setObjectName("FormInput")
         self.new_book_location.setReadOnly(True)
 
-        choose_location = QPushButton("Cambiar…")
+        choose_location = QPushButton("Elegir carpeta…")
+        choose_location.setObjectName("Secondary")
         choose_location.clicked.connect(self._choose_new_book_parent)
 
         location_row.addWidget(self.new_book_location, 1)
         location_row.addWidget(choose_location)
 
-        layout.addWidget(title_label)
-        layout.addWidget(self.new_book_title)
-        layout.addWidget(author_label)
-        layout.addWidget(self.new_book_author)
-        layout.addWidget(folder_label)
-        layout.addWidget(self.new_book_folder)
-        layout.addWidget(location_label)
+        structure = QFrame()
+        structure.setObjectName("InfoCard")
+        structure_layout = QVBoxLayout(structure)
+        structure_layout.setContentsMargins(12, 10, 12, 10)
+        structure_layout.setSpacing(2)
+
+        structure_title = QLabel("Estructura inicial")
+        structure_title.setObjectName("InfoTitle")
+        structure_text = QLabel(
+            "Portada  •  Introducción  •  Bibliografía  •  carpeta de imágenes"
+        )
+        structure_text.setObjectName("FieldHint")
+        structure_text.setWordWrap(True)
+
+        structure_layout.addWidget(structure_title)
+        structure_layout.addWidget(structure_text)
+
+        for widget in (
+            title_label,
+            self.new_book_title,
+            title_hint,
+            author_label,
+            self.new_book_author,
+            folder_label,
+            self.new_book_folder,
+            folder_hint,
+            location_label,
+        ):
+            layout.addWidget(widget)
+
         layout.addLayout(location_row)
-        layout.addStretch(1)
+        layout.addSpacing(6)
+        layout.addWidget(structure)
+        layout.addSpacing(8)
 
         actions = QHBoxLayout()
+        actions.setSpacing(8)
+
         cancel_btn = QPushButton("Cancelar")
+        cancel_btn.setObjectName("Secondary")
         cancel_btn.clicked.connect(self._hide_overlay)
 
         create_btn = QPushButton("Crear libro")
@@ -525,6 +597,80 @@ class MainWindow(QMainWindow):
         actions.addWidget(create_btn)
         layout.addLayout(actions)
 
+        page_layout.addWidget(surface, 0, Qt.AlignHCenter)
+        page_layout.addStretch(1)
+        return page
+
+    def _build_new_chapter_page(self) -> QWidget:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(22, 18, 22, 22)
+        page_layout.addStretch(1)
+
+        surface = QFrame()
+        surface.setObjectName("FormSurface")
+        surface.setMaximumWidth(620)
+
+        layout = QVBoxLayout(surface)
+        layout.setContentsMargins(26, 24, 26, 24)
+        layout.setSpacing(10)
+
+        title = QLabel("Nuevo capítulo")
+        title.setObjectName("FormTitle")
+
+        subtitle = QLabel(
+            "Agrega un capítulo al libro activo. ArchiTecQuart lo incluirá "
+            "automáticamente en la estructura de Quarto."
+        )
+        subtitle.setObjectName("FormSubtitle")
+        subtitle.setWordWrap(True)
+
+        field_label = QLabel("Título del capítulo")
+        field_label.setObjectName("FieldLabel")
+
+        self.new_chapter_title = QLineEdit()
+        self.new_chapter_title.setObjectName("FormInput")
+        self.new_chapter_title.setPlaceholderText("Ej. Marco teórico")
+        self.new_chapter_title.textChanged.connect(self._update_chapter_preview)
+        self.new_chapter_title.returnPressed.connect(self._new_chapter)
+
+        self.new_chapter_preview = QLabel("Archivo: —")
+        self.new_chapter_preview.setObjectName("PathPreview")
+
+        info = QLabel(
+            "El capítulo se creará como archivo .qmd y aparecerá en la lista "
+            "de capítulos del libro."
+        )
+        info.setObjectName("FieldHint")
+        info.setWordWrap(True)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+
+        cancel_btn = QPushButton("Cancelar")
+        cancel_btn.setObjectName("Secondary")
+        cancel_btn.clicked.connect(self._hide_overlay)
+
+        create_btn = QPushButton("Crear capítulo")
+        create_btn.setObjectName("Primary")
+        create_btn.clicked.connect(self._new_chapter)
+
+        actions.addStretch(1)
+        actions.addWidget(cancel_btn)
+        actions.addWidget(create_btn)
+
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        layout.addSpacing(10)
+        layout.addWidget(field_label)
+        layout.addWidget(self.new_chapter_title)
+        layout.addWidget(self.new_chapter_preview)
+        layout.addWidget(info)
+        layout.addSpacing(8)
+        layout.addLayout(actions)
+
+        page_layout.addWidget(surface, 0, Qt.AlignHCenter)
+        page_layout.addStretch(1)
         return page
 
     def _build_bibliography_page(self) -> QWidget:
@@ -538,6 +684,7 @@ class MainWindow(QMainWindow):
         self.bib_count.setObjectName("Muted")
 
         refresh_btn = QPushButton("↻ Actualizar")
+        refresh_btn.setObjectName("Secondary")
         refresh_btn.clicked.connect(self._populate_bibliography_table)
 
         info.addWidget(self.bib_count)
@@ -562,6 +709,7 @@ class MainWindow(QMainWindow):
 
         toolbar = QHBoxLayout()
         clear_btn = QPushButton("Limpiar")
+        clear_btn.setObjectName("Secondary")
         clear_btn.clicked.connect(self._clear_logs)
         toolbar.addStretch(1)
         toolbar.addWidget(clear_btn)
@@ -589,20 +737,37 @@ class MainWindow(QMainWindow):
     def _show_overlay(self, name: str) -> None:
         if name == "new_book":
             self.overlay_title.setText("Nuevo libro Quarto")
+            self.overlay_subtitle.setText("Configura un proyecto nuevo sin salir de ArchiTecQuart")
             self._reset_new_book_form()
             self.overlay_stack.setCurrentWidget(self.new_book_page)
 
+        elif name == "new_chapter":
+            if not self.book.is_book():
+                QMessageBox.information(
+                    self,
+                    "Nuevo capítulo",
+                    "Crea o abre un libro Quarto primero.",
+                )
+                return
+            self.overlay_title.setText("Nuevo capítulo")
+            self.overlay_subtitle.setText(self.book.title())
+            self._reset_new_chapter_form()
+            self.overlay_stack.setCurrentWidget(self.new_chapter_page)
+
         elif name == "bibliography":
             self.overlay_title.setText("Bibliografía")
+            self.overlay_subtitle.setText("Referencias detectadas en el libro activo")
             self._populate_bibliography_table()
             self.overlay_stack.setCurrentWidget(self.bibliography_page)
 
         elif name == "logs":
             self.overlay_title.setText("Logs de Quarto / ArchiTecQuart")
+            self.overlay_subtitle.setText("Actividad técnica, renders y mensajes de diagnóstico")
             self.overlay_stack.setCurrentWidget(self.logs_page)
 
         elif name == "terminal":
             self.overlay_title.setText("Terminal")
+            self.overlay_subtitle.setText("Consola del proyecto actual")
             self._ensure_terminal_widget()
             self.overlay_stack.setCurrentWidget(self.terminal_page)
 
@@ -657,6 +822,19 @@ class MainWindow(QMainWindow):
         self.new_book_parent = default_parent
         self.new_book_location.setText(str(default_parent))
         self.new_book_title.setFocus()
+
+    def _reset_new_chapter_form(self) -> None:
+        self.new_chapter_title.clear()
+        self.new_chapter_preview.setText("Archivo: —")
+        self.new_chapter_title.setFocus()
+
+    def _update_chapter_preview(self, title: str) -> None:
+        if not title.strip():
+            self.new_chapter_preview.setText("Archivo: —")
+            return
+
+        slug = BookModel.slugify(title.strip()) or "capitulo"
+        self.new_chapter_preview.setText(f"Archivo: {slug}.qmd")
 
     def _suggest_book_folder(self, title: str) -> None:
         if not title.strip():
@@ -1010,11 +1188,19 @@ class MainWindow(QMainWindow):
         )
 
     def _set_preview_state(self, running: bool) -> None:
-        text = "● Preview activo" if running else "● Preview detenido"
         object_name = "PreviewOn" if running else "PreviewOff"
+
+        self.preview_state.setText(
+            "● Preview activo" if running else "● Preview detenido"
+        )
+        self.preview_state.setObjectName(object_name)
+
+        self.preview_panel_state.setText(
+            "● activo" if running else "● detenido"
+        )
+        self.preview_panel_state.setObjectName(object_name)
+
         for label in (self.preview_state, self.preview_panel_state):
-            label.setText(text)
-            label.setObjectName(object_name)
             label.style().unpolish(label)
             label.style().polish(label)
             label.update()
@@ -1322,18 +1508,25 @@ class MainWindow(QMainWindow):
 
     def _new_chapter(self) -> None:
         if not self.book.is_book():
-            QMessageBox.information(self, "Nuevo capítulo", "Abre primero un proyecto Quarto Book.")
+            QMessageBox.information(
+                self,
+                "Nuevo capítulo",
+                "Crea o abre un libro Quarto primero.",
+            )
             return
 
-        title, ok = QInputDialog.getText(self, "Nuevo capítulo", "Título del capítulo:")
-        if not ok or not title.strip():
+        title = self.new_chapter_title.text().strip()
+        if not title:
+            self.new_chapter_title.setFocus()
             return
 
         try:
-            path = self.book.add_chapter(title.strip())
+            path = self.book.add_chapter(title)
+            self._hide_overlay()
             self._refresh_tree()
             self._open_file(path)
             self._append_log(f"Capítulo creado: {path.name}")
+            self._set_status(f"Capítulo creado: {path.name}")
         except Exception as exc:
             QMessageBox.warning(self, "Nuevo capítulo", str(exc))
 
