@@ -2,18 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt, QUrl
+from PySide6.QtCore import QSettings, QTimer, Qt, QUrl
 from PySide6.QtGui import QAction, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
-    QFileSystemModel,
     QFrame,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -21,11 +22,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QSplitter,
     QStackedWidget,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
-    QTreeView,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -52,6 +51,9 @@ class MainWindow(QMainWindow):
         self.log_lines: list[str] = []
         self.bib_entries: list[dict[str, str]] = []
         self.terminal_widget: TerminalWidget | None = None
+
+        self.settings = QSettings("EduardoMedinaLabs", "ArchiTecQuart")
+        self.recent_books: list[str] = self._read_recent_books()
 
         screen = QApplication.primaryScreen()
         geometry = screen.availableGeometry() if screen else None
@@ -102,13 +104,18 @@ class MainWindow(QMainWindow):
 
         self.main_splitter.addWidget(self._build_book_panel())
         self.main_splitter.addWidget(self._build_editor_panel())
+
+        self.preview_panel = self._build_preview_panel()
+        self.main_splitter.addWidget(self.preview_panel)
+
         self.main_splitter.setStretchFactor(0, 0)
         self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setStretchFactor(2, 1)
 
         if self.compact:
-            self.main_splitter.setSizes([285, 1040])
+            self.main_splitter.setSizes([250, 625, 455])
         else:
-            self.main_splitter.setSizes([320, 1240])
+            self.main_splitter.setSizes([285, 780, 500])
 
         outer.addWidget(self.main_splitter, 1)
         outer.addWidget(self._build_status_bar())
@@ -180,8 +187,9 @@ class MainWindow(QMainWindow):
         )
         self.auto_btn.toggled.connect(self._toggle_auto_preview)
 
-        preview_btn = QPushButton("Preview")
-        preview_btn.clicked.connect(lambda: self._show_overlay("preview"))
+        self.preview_btn = QPushButton("Preview")
+        self.preview_btn.setToolTip("Mostrar u ocultar la vista previa de la derecha")
+        self.preview_btn.clicked.connect(self._toggle_preview_panel)
 
         bib_btn = QPushButton("Biblio")
         bib_btn.setToolTip("Bibliografía")
@@ -221,7 +229,7 @@ class MainWindow(QMainWindow):
             new_btn,
             save_btn,
             self.auto_btn,
-            preview_btn,
+            self.preview_btn,
             bib_btn,
             logs_btn,
             terminal_btn,
@@ -237,85 +245,60 @@ class MainWindow(QMainWindow):
         frame.setObjectName("SidePanel")
 
         if self.compact:
-            frame.setMinimumWidth(270)
-            frame.setMaximumWidth(360)
+            frame.setMinimumWidth(225)
+            frame.setMaximumWidth(300)
         else:
-            frame.setMinimumWidth(300)
-            frame.setMaximumWidth(420)
+            frame.setMinimumWidth(250)
+            frame.setMaximumWidth(340)
 
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(9, 9, 9, 9)
         layout.setSpacing(7)
 
-        self.left_tabs = QTabWidget()
-        self.left_tabs.setDocumentMode(True)
+        books_header = QHBoxLayout()
+        books_title = QLabel("Mis libros")
+        books_title.setObjectName("SectionTitle")
 
-        book_page = QWidget()
-        book_layout = QVBoxLayout(book_page)
-        book_layout.setContentsMargins(2, 2, 2, 2)
-        book_layout.setSpacing(6)
+        new_book_btn = QPushButton("+ Nuevo")
+        new_book_btn.setToolTip("Crear un libro Quarto")
+        new_book_btn.clicked.connect(lambda: self._show_overlay("new_book"))
 
-        book_header = QHBoxLayout()
-        title = QLabel("Estructura del libro")
-        title.setObjectName("SectionTitle")
+        open_book_btn = QPushButton("Abrir")
+        open_book_btn.setToolTip("Abrir un libro Quarto existente")
+        open_book_btn.clicked.connect(self._choose_project)
 
-        add_btn = QPushButton("+")
-        add_btn.setFixedWidth(30)
-        add_btn.setToolTip("Nuevo capítulo")
-        add_btn.clicked.connect(self._new_chapter)
+        books_header.addWidget(books_title)
+        books_header.addStretch(1)
+        books_header.addWidget(new_book_btn)
+        books_header.addWidget(open_book_btn)
+        layout.addLayout(books_header)
 
-        book_header.addWidget(title)
-        book_header.addStretch(1)
-        book_header.addWidget(add_btn)
-        book_layout.addLayout(book_header)
+        self.books_list = QListWidget()
+        self.books_list.setObjectName("BooksList")
+        self.books_list.setMaximumHeight(185 if self.compact else 220)
+        self.books_list.itemDoubleClicked.connect(self._recent_book_activated)
+        layout.addWidget(self.books_list)
+
+        chapters_header = QHBoxLayout()
+        chapters_title = QLabel("Capítulos")
+        chapters_title.setObjectName("SectionTitle")
+
+        add_chapter_btn = QPushButton("+")
+        add_chapter_btn.setFixedWidth(30)
+        add_chapter_btn.setToolTip("Nuevo capítulo")
+        add_chapter_btn.clicked.connect(self._new_chapter)
+
+        chapters_header.addWidget(chapters_title)
+        chapters_header.addStretch(1)
+        chapters_header.addWidget(add_chapter_btn)
+        layout.addLayout(chapters_header)
 
         self.book_tree = QTreeWidget()
         self.book_tree.setHeaderHidden(True)
         self.book_tree.itemClicked.connect(self._tree_item_clicked)
-        book_layout.addWidget(self.book_tree, 1)
+        layout.addWidget(self.book_tree, 1)
 
-        files_page = QWidget()
-        files_layout = QVBoxLayout(files_page)
-        files_layout.setContentsMargins(2, 2, 2, 2)
-        files_layout.setSpacing(6)
-
-        file_header = QHBoxLayout()
-        self.files_path_label = QLabel(str(Path.home()))
-        self.files_path_label.setObjectName("Muted")
-        self.files_path_label.setToolTip(str(Path.home()))
-
-        home_btn = QPushButton("Home")
-        home_btn.setFixedWidth(52)
-        home_btn.clicked.connect(self._show_home_files)
-
-        project_btn = QPushButton("Proyecto")
-        project_btn.setFixedWidth(65)
-        project_btn.clicked.connect(self._show_project_files)
-
-        file_header.addWidget(self.files_path_label, 1)
-        file_header.addWidget(home_btn)
-        file_header.addWidget(project_btn)
-        files_layout.addLayout(file_header)
-
-        self.file_model = QFileSystemModel(self)
-        self.file_model.setReadOnly(True)
-        self.file_model.setRootPath(str(Path.home()))
-
-        self.file_tree = QTreeView()
-        self.file_tree.setModel(self.file_model)
-        self.file_tree.setRootIndex(self.file_model.index(str(Path.home())))
-        self.file_tree.setHeaderHidden(True)
-        self.file_tree.setAnimated(True)
-        self.file_tree.setIndentation(16)
-        for column in range(1, 4):
-            self.file_tree.hideColumn(column)
-        self.file_tree.doubleClicked.connect(self._file_tree_double_clicked)
-        files_layout.addWidget(self.file_tree, 1)
-
-        self.left_tabs.addTab(book_page, "Libro")
-        self.left_tabs.addTab(files_page, "Archivos")
-        layout.addWidget(self.left_tabs, 1)
-
+        self._refresh_recent_books()
         return frame
 
     def _build_editor_panel(self) -> QWidget:
@@ -355,6 +338,50 @@ class MainWindow(QMainWindow):
         self.editor.textChanged.connect(self._editor_changed)
         layout.addWidget(self.editor, 1)
 
+        return frame
+
+    def _build_preview_panel(self) -> QWidget:
+        frame = QFrame()
+        frame.setObjectName("PreviewPanel")
+        frame.setMinimumWidth(330 if self.compact else 390)
+
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(7, 7, 7, 7)
+        layout.setSpacing(6)
+
+        header = QHBoxLayout()
+        title = QLabel("Vista previa")
+        title.setObjectName("SectionTitle")
+
+        self.preview_panel_state = QLabel("● detenido")
+        self.preview_panel_state.setObjectName("PreviewOff")
+
+        reload_btn = QPushButton("↻")
+        reload_btn.setFixedWidth(30)
+        reload_btn.setToolTip("Recargar la vista previa")
+        reload_btn.clicked.connect(lambda: self.preview_view.reload())
+
+        hide_btn = QPushButton("×")
+        hide_btn.setFixedWidth(30)
+        hide_btn.setToolTip("Ocultar vista previa")
+        hide_btn.clicked.connect(self._toggle_preview_panel)
+
+        header.addWidget(title)
+        header.addWidget(self.preview_panel_state)
+        header.addStretch(1)
+        header.addWidget(reload_btn)
+        header.addWidget(hide_btn)
+        layout.addLayout(header)
+
+        self.preview_view = QWebEngineView()
+        self.preview_view.setZoomFactor(0.82 if self.compact else 0.95)
+        self.preview_view.setHtml(
+            "<html><body style='font-family:sans-serif;padding:28px;color:#64748b'>"
+            "<h2>Vista previa del libro</h2>"
+            "<p>Crea o abre un libro Quarto para verlo aquí.</p>"
+            "</body></html>"
+        )
+        layout.addWidget(self.preview_view, 1)
         return frame
 
     def _build_status_bar(self) -> QWidget:
@@ -414,13 +441,11 @@ class MainWindow(QMainWindow):
         card_layout.addWidget(self.overlay_stack, 1)
 
         self.new_book_page = self._build_new_book_page()
-        self.preview_page = self._build_preview_page()
         self.bibliography_page = self._build_bibliography_page()
         self.logs_page = self._build_logs_page()
         self.terminal_page = self._build_terminal_page()
 
         self.overlay_stack.addWidget(self.new_book_page)
-        self.overlay_stack.addWidget(self.preview_page)
         self.overlay_stack.addWidget(self.bibliography_page)
         self.overlay_stack.addWidget(self.logs_page)
         self.overlay_stack.addWidget(self.terminal_page)
@@ -500,37 +525,6 @@ class MainWindow(QMainWindow):
 
         return page
 
-    def _build_preview_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(7)
-
-        toolbar = QHBoxLayout()
-        self.preview_overlay_state = QLabel("● Preview detenido")
-        self.preview_overlay_state.setObjectName("PreviewOff")
-
-        reload_btn = QPushButton("↻ Recargar")
-        reload_btn.clicked.connect(self.preview_view.reload if hasattr(self, "preview_view") else lambda: None)
-
-        toolbar.addWidget(self.preview_overlay_state)
-        toolbar.addStretch(1)
-        toolbar.addWidget(reload_btn)
-        layout.addLayout(toolbar)
-
-        self.preview_view = QWebEngineView()
-        self.preview_view.setZoomFactor(0.90 if self.compact else 1.0)
-        self.preview_view.setHtml(
-            "<html><body style='font-family:sans-serif;padding:32px;color:#64748b'>"
-            "<h2>Vista previa de Quarto</h2>"
-            "<p>Activa Auto Preview o pulsa Preview para iniciar.</p>"
-            "</body></html>"
-        )
-        reload_btn.clicked.disconnect()
-        reload_btn.clicked.connect(self.preview_view.reload)
-        layout.addWidget(self.preview_view, 1)
-        return page
-
     def _build_bibliography_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -595,23 +589,6 @@ class MainWindow(QMainWindow):
             self.overlay_title.setText("Nuevo libro Quarto")
             self._reset_new_book_form()
             self.overlay_stack.setCurrentWidget(self.new_book_page)
-
-        elif name == "preview":
-            if not self.book.is_book():
-                QMessageBox.information(self, "Preview", "Abre primero un proyecto Quarto Book.")
-                return
-
-            if not self.quarto.is_preview_running():
-                if not self.auto_btn.isChecked():
-                    self.auto_btn.blockSignals(True)
-                    self.auto_btn.setChecked(True)
-                    self.auto_btn.blockSignals(False)
-                if not self._ensure_preview():
-                    return
-
-            self.overlay_title.setText("Vista previa del libro")
-            self.overlay_stack.setCurrentWidget(self.preview_page)
-            self._sync_preview_url()
 
         elif name == "bibliography":
             self.overlay_title.setText("Bibliografía")
@@ -743,8 +720,6 @@ class MainWindow(QMainWindow):
 
         self._hide_overlay()
         self._load_project(root)
-        self.left_tabs.setCurrentIndex(0)
-
         intro = root / "01-introduccion.qmd"
         if intro.exists():
             self._open_file(intro)
@@ -758,62 +733,106 @@ class MainWindow(QMainWindow):
             f"Tu libro Quarto fue creado correctamente en:\n{root}",
         )
 
-    def _show_files_root(self, root: Path) -> None:
+    def _read_recent_books(self) -> list[str]:
+        value = self.settings.value("recent_books", [])
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, (list, tuple)):
+            return []
+
+        books: list[str] = []
+        for raw in value:
+            path = Path(str(raw)).expanduser()
+            if (path / "_quarto.yml").exists():
+                resolved = str(path.resolve())
+                if resolved not in books:
+                    books.append(resolved)
+        return books[:12]
+
+    def _refresh_recent_books(self) -> None:
+        if not hasattr(self, "books_list"):
+            return
+
+        self.books_list.clear()
+
+        valid: list[str] = []
+        for raw in self.recent_books:
+            root = Path(raw)
+            if not (root / "_quarto.yml").exists():
+                continue
+
+            model = BookModel(root)
+            item = QListWidgetItem(model.title())
+            item.setData(Qt.UserRole, str(root))
+            self.books_list.addItem(item)
+            valid.append(str(root))
+
+        self.recent_books = valid[:12]
+        self.settings.setValue("recent_books", self.recent_books)
+
+        if not self.recent_books:
+            item = QListWidgetItem("Aún no hay libros")
+            item.setFlags(Qt.NoItemFlags)
+            self.books_list.addItem(item)
+
+    def _remember_book(self, root: Path) -> None:
         root = root.expanduser().resolve()
-        if not root.exists():
-            return
-        self.file_model.setRootPath(str(root))
-        self.file_tree.setRootIndex(self.file_model.index(str(root)))
-        display = str(root)
-        home = str(Path.home())
-        if display == home:
-            display = "~"
-        elif display.startswith(home + "/"):
-            display = "~" + display[len(home):]
-        self.files_path_label.setText(display)
-        self.files_path_label.setToolTip(str(root))
-
-    def _show_home_files(self) -> None:
-        self._show_files_root(Path.home())
-        self.left_tabs.setCurrentIndex(1)
-
-    def _show_project_files(self) -> None:
-        self._show_files_root(self.project_root)
-        self.left_tabs.setCurrentIndex(1)
-
-    def _find_book_root(self, path: Path) -> Path | None:
-        candidate = path if path.is_dir() else path.parent
-        home = Path.home().resolve()
-
-        while True:
-            if (candidate / "_quarto.yml").exists():
-                return candidate
-            if candidate == candidate.parent:
-                break
-            if candidate == home.parent:
-                break
-            candidate = candidate.parent
-
-        return None
-
-    def _file_tree_double_clicked(self, index) -> None:
-        path = Path(self.file_model.filePath(index))
-        if path.is_dir():
+        if not (root / "_quarto.yml").exists():
             return
 
-        if path.name == "_quarto.yml":
-            self._load_project(path.parent)
-            self.left_tabs.setCurrentIndex(0)
+        value = str(root)
+        self.recent_books = [
+            existing for existing in self.recent_books
+            if existing != value
+        ]
+        self.recent_books.insert(0, value)
+        self.recent_books = self.recent_books[:12]
+        self.settings.setValue("recent_books", self.recent_books)
+        self._refresh_recent_books()
+
+    def _recent_book_activated(self, item: QListWidgetItem) -> None:
+        raw = item.data(Qt.UserRole)
+        if not raw:
             return
 
-        if path.suffix.lower() != ".qmd":
+        root = Path(str(raw))
+        if not (root / "_quarto.yml").exists():
+            self.recent_books = [
+                existing for existing in self.recent_books
+                if existing != str(root)
+            ]
+            self._refresh_recent_books()
+            QMessageBox.information(
+                self,
+                "Libro no encontrado",
+                "Ese libro ya no está disponible en su ubicación original.",
+            )
             return
 
-        root = self._find_book_root(path)
-        if root and root != self.project_root:
-            self._load_project(root)
+        self._load_project(root)
 
-        self._open_file(path)
+    def _toggle_preview_panel(self) -> None:
+        if not hasattr(self, "preview_panel"):
+            return
+
+        if self.preview_panel.isVisible():
+            self.preview_panel.hide()
+            self.preview_btn.setText("Preview")
+            return
+
+        if not self.book.is_book():
+            QMessageBox.information(
+                self,
+                "Vista previa",
+                "Crea o abre un libro Quarto primero.",
+            )
+            return
+
+        self.preview_panel.show()
+        self.preview_btn.setText("Preview ✓")
+        if not self.quarto.is_preview_running() and self.auto_btn.isChecked():
+            self._ensure_preview()
+        self._sync_preview_url()
 
     def _load_project(self, root: Path) -> None:
         self._save_current(silent=True)
@@ -834,22 +853,12 @@ class MainWindow(QMainWindow):
 
         if self.book.is_book():
             self.project_label.setText(self.book.title())
-            self.project_label.setToolTip(str(self.project_root))
-            self.left_tabs.setCurrentIndex(0)
+            self.project_label.setToolTip(self.book.title())
+            self._remember_book(self.project_root)
         else:
-            display = str(self.project_root)
-            home = str(Path.home())
-            if display == home:
-                display = "~"
-            elif display.startswith(home + "/"):
-                display = "~" + display[len(home):]
-            self.project_label.setText(display)
-            self.project_label.setToolTip(str(self.project_root))
-            self.left_tabs.setCurrentIndex(1)
+            self.project_label.setText("Sin libro")
+            self.project_label.setToolTip("Crea o abre un libro Quarto")
 
-        self._show_files_root(
-            self.project_root if self.book.is_book() else Path.home()
-        )
         self._refresh_tree()
         self._refresh_bibliography()
 
@@ -867,7 +876,7 @@ class MainWindow(QMainWindow):
             create_item.setData(0, Qt.UserRole, "__new_book__")
             self.book_tree.addTopLevelItem(create_item)
 
-            help_item = QTreeWidgetItem(["Usa Archivos para navegar tu sistema"])
+            help_item = QTreeWidgetItem(["Crea o abre un libro para ver sus capítulos"])
             help_item.setFlags(Qt.NoItemFlags)
             self.book_tree.addTopLevelItem(help_item)
             return
@@ -931,10 +940,7 @@ class MainWindow(QMainWindow):
         self.dirty = False
         self.file_label.setText(path.name)
 
-        try:
-            self.left_status.setText(str(path.relative_to(self.project_root)))
-        except ValueError:
-            self.left_status.setText(path.name)
+        self.left_status.setText(path.name)
 
         if self.quarto.base_url:
             QTimer.singleShot(250, self._sync_preview_url)
@@ -997,14 +1003,14 @@ class MainWindow(QMainWindow):
         self.preview_view.setHtml(
             "<html><body style='font-family:sans-serif;padding:32px;color:#64748b'>"
             "<h2>Preview detenido</h2>"
-            "<p>Activa Auto o pulsa Preview para volver a iniciar Quarto.</p>"
+            "<p>Activa Auto para volver a iniciar Quarto Preview.</p>"
             "</body></html>"
         )
 
     def _set_preview_state(self, running: bool) -> None:
         text = "● Preview activo" if running else "● Preview detenido"
         object_name = "PreviewOn" if running else "PreviewOff"
-        for label in (self.preview_state, self.preview_overlay_state):
+        for label in (self.preview_state, self.preview_panel_state):
             label.setText(text)
             label.setObjectName(object_name)
             label.style().unpolish(label)
@@ -1068,9 +1074,25 @@ class MainWindow(QMainWindow):
         self._set_status(message)
 
     def _choose_project(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Abrir libro Quarto", str(self.project_root))
-        if folder:
-            self._load_project(Path(folder))
+        start = self.project_root if self.book.is_book() else Path.home()
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Abrir libro Quarto",
+            str(start),
+        )
+        if not folder:
+            return
+
+        root = Path(folder)
+        if not (root / "_quarto.yml").exists():
+            QMessageBox.information(
+                self,
+                "No es un libro Quarto",
+                "La carpeta seleccionada no contiene un archivo _quarto.yml.",
+            )
+            return
+
+        self._load_project(root)
 
     def _new_chapter(self) -> None:
         if not self.book.is_book():
