@@ -117,7 +117,10 @@ class BookModel:
         (root / "images").mkdir(exist_ok=True)
 
         book_data: dict[str, Any] = {
-            "project": {"type": "book"},
+            "project": {
+                "type": "book",
+                "output-dir": "_book",
+            },
             "book": {
                 "title": title.strip() or "Mi libro",
                 "chapters": [
