@@ -166,13 +166,10 @@ class BookModel:
 
         return root
 
-    def add_chapter(self, title: str) -> Path:
+    def next_chapter_filename(self, title: str) -> str:
         data = self.load_config()
-        if not data:
-            raise RuntimeError("No se encontró _quarto.yml")
-
-        book = data.setdefault("book", {})
-        chapters = book.setdefault("chapters", [])
+        book = data.get("book") or {}
+        chapters = book.get("chapters") or []
 
         number = self._next_chapter_number(chapters)
         slug = self.slugify(title) or "capitulo"
@@ -184,6 +181,19 @@ class BookModel:
             filename = f"{number:02d}-{slug}-{counter}.qmd"
             path = self.root / filename
             counter += 1
+
+        return filename
+
+    def add_chapter(self, title: str) -> Path:
+        data = self.load_config()
+        if not data:
+            raise RuntimeError("No se encontró _quarto.yml")
+
+        book = data.setdefault("book", {})
+        chapters = book.setdefault("chapters", [])
+
+        filename = self.next_chapter_filename(title)
+        path = self.root / filename
 
         path.write_text(
             f"# {title}\n\nEscribe aquí el contenido de este capítulo.\n",
