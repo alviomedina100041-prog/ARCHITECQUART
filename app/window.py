@@ -159,7 +159,7 @@ class MainWindow(QMainWindow):
 
         new_book_btn = QPushButton("+ Libro")
         new_book_btn.setToolTip("Crear un libro Quarto nuevo")
-        new_book_btn.clicked.connect(self._new_book)
+        new_book_btn.clicked.connect(lambda: self._show_overlay("new_book"))
 
         open_btn = QPushButton("Abrir")
         open_btn.clicked.connect(self._choose_project)
@@ -413,17 +413,92 @@ class MainWindow(QMainWindow):
         self.overlay_stack = QStackedWidget()
         card_layout.addWidget(self.overlay_stack, 1)
 
+        self.new_book_page = self._build_new_book_page()
         self.preview_page = self._build_preview_page()
         self.bibliography_page = self._build_bibliography_page()
         self.logs_page = self._build_logs_page()
         self.terminal_page = self._build_terminal_page()
 
+        self.overlay_stack.addWidget(self.new_book_page)
         self.overlay_stack.addWidget(self.preview_page)
         self.overlay_stack.addWidget(self.bibliography_page)
         self.overlay_stack.addWidget(self.logs_page)
         self.overlay_stack.addWidget(self.terminal_page)
 
         host_layout.addWidget(self.overlay_card, 1)
+
+    def _build_new_book_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(18, 12, 18, 18)
+        layout.setSpacing(12)
+
+        intro = QLabel(
+            "Crea un proyecto Quarto Book nuevo. "
+            "ArchiTecQuart generará la estructura inicial automáticamente."
+        )
+        intro.setWordWrap(True)
+        intro.setObjectName("Muted")
+        layout.addWidget(intro)
+
+        title_label = QLabel("Título del libro")
+        title_label.setObjectName("SectionTitle")
+        self.new_book_title = QLineEdit()
+        self.new_book_title.setPlaceholderText("Ej. Mi libro de investigación")
+        self.new_book_title.textChanged.connect(self._suggest_book_folder)
+
+        author_label = QLabel("Autor")
+        author_label.setObjectName("SectionTitle")
+        self.new_book_author = QLineEdit()
+        self.new_book_author.setPlaceholderText("Opcional")
+
+        folder_label = QLabel("Nombre de la carpeta")
+        folder_label.setObjectName("SectionTitle")
+        self.new_book_folder = QLineEdit()
+        self.new_book_folder.setPlaceholderText("mi-libro")
+
+        location_label = QLabel("Guardar en")
+        location_label.setObjectName("SectionTitle")
+
+        location_row = QHBoxLayout()
+        default_parent = Path.home() / "Documents"
+        if not default_parent.exists():
+            default_parent = Path.home()
+        self.new_book_parent = default_parent
+
+        self.new_book_location = QLineEdit(str(self.new_book_parent))
+        self.new_book_location.setReadOnly(True)
+
+        choose_location = QPushButton("Cambiar…")
+        choose_location.clicked.connect(self._choose_new_book_parent)
+
+        location_row.addWidget(self.new_book_location, 1)
+        location_row.addWidget(choose_location)
+
+        layout.addWidget(title_label)
+        layout.addWidget(self.new_book_title)
+        layout.addWidget(author_label)
+        layout.addWidget(self.new_book_author)
+        layout.addWidget(folder_label)
+        layout.addWidget(self.new_book_folder)
+        layout.addWidget(location_label)
+        layout.addLayout(location_row)
+        layout.addStretch(1)
+
+        actions = QHBoxLayout()
+        cancel_btn = QPushButton("Cancelar")
+        cancel_btn.clicked.connect(self._hide_overlay)
+
+        create_btn = QPushButton("Crear libro")
+        create_btn.setObjectName("Primary")
+        create_btn.clicked.connect(self._new_book)
+
+        actions.addStretch(1)
+        actions.addWidget(cancel_btn)
+        actions.addWidget(create_btn)
+        layout.addLayout(actions)
+
+        return page
 
     def _build_preview_page(self) -> QWidget:
         page = QWidget()
@@ -516,7 +591,12 @@ class MainWindow(QMainWindow):
         return page
 
     def _show_overlay(self, name: str) -> None:
-        if name == "preview":
+        if name == "new_book":
+            self.overlay_title.setText("Nuevo libro Quarto")
+            self._reset_new_book_form()
+            self.overlay_stack.setCurrentWidget(self.new_book_page)
+
+        elif name == "preview":
             if not self.book.is_book():
                 QMessageBox.information(self, "Preview", "Abre primero un proyecto Quarto Book.")
                 return
@@ -586,48 +666,73 @@ class MainWindow(QMainWindow):
         self.terminal_widget = None
         self.terminal_placeholder.show()
 
+    def _reset_new_book_form(self) -> None:
+        self.new_book_title.clear()
+        self.new_book_author.clear()
+        self.new_book_folder.clear()
+
+        default_parent = Path.home() / "Documents"
+        if not default_parent.exists():
+            default_parent = Path.home()
+
+        self.new_book_parent = default_parent
+        self.new_book_location.setText(str(default_parent))
+        self.new_book_title.setFocus()
+
+    def _suggest_book_folder(self, title: str) -> None:
+        if not title.strip():
+            if not self.new_book_folder.hasFocus():
+                self.new_book_folder.clear()
+            return
+
+        suggestion = BookModel.slugify(title.strip()) or "mi-libro-quarto"
+
+        # Update the folder automatically until the user edits it manually.
+        current = self.new_book_folder.text().strip()
+        if (
+            not current
+            or current == "mi-libro-quarto"
+            or not self.new_book_folder.isModified()
+        ):
+            self.new_book_folder.setText(suggestion)
+            self.new_book_folder.setModified(False)
+
+    def _choose_new_book_parent(self) -> None:
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Elegir dónde guardar el nuevo libro",
+            str(self.new_book_parent),
+        )
+        if not selected:
+            return
+
+        self.new_book_parent = Path(selected).expanduser().resolve()
+        self.new_book_location.setText(str(self.new_book_parent))
+
     def _new_book(self) -> None:
-        parent = QFileDialog.getExistingDirectory(
-            self,
-            "Dónde crear el nuevo libro",
-            str(Path.home()),
-        )
-        if not parent:
+        title = self.new_book_title.text().strip()
+        author = self.new_book_author.text().strip()
+        folder_name = self.new_book_folder.text().strip()
+
+        if not title:
+            QMessageBox.information(
+                self,
+                "Falta el título",
+                "Escribe un título para crear el libro.",
+            )
+            self.new_book_title.setFocus()
             return
 
-        title, ok = QInputDialog.getText(
-            self,
-            "Nuevo libro Quarto",
-            "Título del libro:",
-        )
-        if not ok or not title.strip():
-            return
-
-        default_folder = BookModel.slugify(title.strip()) or "mi-libro-quarto"
-        folder_name, ok = QInputDialog.getText(
-            self,
-            "Carpeta del libro",
-            "Nombre de la carpeta:",
-            QLineEdit.Normal,
-            default_folder,
-        )
-        if not ok or not folder_name.strip():
-            return
-
-        author, ok = QInputDialog.getText(
-            self,
-            "Autor",
-            "Autor (opcional):",
-        )
-        if not ok:
-            return
+        if not folder_name:
+            folder_name = BookModel.slugify(title) or "mi-libro-quarto"
+            self.new_book_folder.setText(folder_name)
 
         try:
             root = BookModel.create_book(
-                parent=parent,
-                title=title.strip(),
-                author=author.strip(),
-                folder_name=folder_name.strip(),
+                parent=self.new_book_parent,
+                title=title,
+                author=author,
+                folder_name=folder_name,
             )
         except FileExistsError as exc:
             QMessageBox.warning(self, "La carpeta ya existe", str(exc))
@@ -636,6 +741,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No se pudo crear el libro", str(exc))
             return
 
+        self._hide_overlay()
         self._load_project(root)
         self.left_tabs.setCurrentIndex(0)
 
@@ -644,10 +750,12 @@ class MainWindow(QMainWindow):
             self._open_file(intro)
 
         self._append_log(f"Libro creado: {root}")
+        self._set_status(f"Libro creado: {root.name}")
+
         QMessageBox.information(
             self,
             "Libro creado",
-            f"Tu libro Quarto fue creado en:\n{root}",
+            f"Tu libro Quarto fue creado correctamente en:\n{root}",
         )
 
     def _show_files_root(self, root: Path) -> None:
@@ -797,7 +905,7 @@ class MainWindow(QMainWindow):
         if not value:
             return
         if value == "__new_book__":
-            self._new_book()
+            self._show_overlay("new_book")
             return
         if value == "__bibliography__":
             self._show_overlay("bibliography")
