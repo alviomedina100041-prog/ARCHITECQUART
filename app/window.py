@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QTimer, Qt, QUrl
@@ -34,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from .book_model import BookModel, parse_bib_file
 from .editor import CodeEditor
+from .export_utils import copy_verified_export
 from .quarto_manager import QuartoManager
 from .terminal import TerminalWidget
 from .theme import APP_STYLE
@@ -53,6 +53,8 @@ class MainWindow(QMainWindow):
         self.bib_entries: list[dict[str, str]] = []
         self.terminal_widget: TerminalWidget | None = None
         self.pending_export: tuple[str, Path] | None = None
+        self.resume_preview_after_render = False
+        self._shutting_down = False
 
         self.settings = QSettings("EduardoMedinaLabs", "ArchiTecQuart")
         self.recent_books: list[str] = self._read_recent_books()
@@ -203,13 +205,13 @@ class MainWindow(QMainWindow):
         terminal_btn = QPushButton("Terminal")
         terminal_btn.clicked.connect(lambda: self._show_overlay("terminal"))
 
-        render_btn = QPushButton("▶ Render")
-        render_btn.setObjectName("Primary")
-        render_btn.clicked.connect(lambda: self._render(None))
+        self.render_btn = QPushButton("▶ Render")
+        self.render_btn.setObjectName("Primary")
+        self.render_btn.clicked.connect(lambda: self._render(None))
 
-        export_btn = QToolButton()
-        export_btn.setText("Exportar ▾")
-        export_menu = QMenu(export_btn)
+        self.export_btn = QToolButton()
+        self.export_btn.setText("Exportar ▾")
+        export_menu = QMenu(self.export_btn)
 
         for label, target in [
             ("HTML", "html"),
@@ -222,8 +224,8 @@ class MainWindow(QMainWindow):
             )
             export_menu.addAction(action)
 
-        export_btn.setMenu(export_menu)
-        export_btn.setPopupMode(QToolButton.InstantPopup)
+        self.export_btn.setMenu(export_menu)
+        self.export_btn.setPopupMode(QToolButton.InstantPopup)
 
         for widget in [
             new_book_btn,
@@ -235,8 +237,8 @@ class MainWindow(QMainWindow):
             bib_btn,
             logs_btn,
             terminal_btn,
-            render_btn,
-            export_btn,
+            self.render_btn,
+            self.export_btn,
         ]:
             layout.addWidget(widget)
 
@@ -553,10 +555,10 @@ class MainWindow(QMainWindow):
         structure_layout.setContentsMargins(12, 10, 12, 10)
         structure_layout.setSpacing(2)
 
-        structure_title = QLabel("Estructura inicial")
+        structure_title = QLabel("Se creará automáticamente")
         structure_title.setObjectName("InfoTitle")
         structure_text = QLabel(
-            "Portada  •  Introducción  •  Bibliografía  •  carpeta de imágenes"
+            "Portada, capítulo de Introducción, archivo de Referencias y carpeta de imágenes."
         )
         structure_text.setObjectName("FieldHint")
         structure_text.setWordWrap(True)
@@ -866,11 +868,34 @@ class MainWindow(QMainWindow):
             self.new_book_folder.setText(suggestion)
             self.new_book_folder.setModified(False)
 
-    def _choose_new_book_parent(self) -> None:
-        selected = QFileDialog.getExistingDirectory(
+    def _choose_directory(self, caption: str, start: Path) -> str:
+        return QFileDialog.getExistingDirectory(
             self,
+            caption,
+            str(start),
+            QFileDialog.Option.ShowDirsOnly
+            | QFileDialog.Option.DontUseNativeDialog,
+        )
+
+    def _choose_save_file(
+        self,
+        caption: str,
+        suggested: Path,
+        file_filter: str,
+    ) -> str:
+        selected, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            caption,
+            str(suggested),
+            file_filter,
+            options=QFileDialog.Option.DontUseNativeDialog,
+        )
+        return selected
+
+    def _choose_new_book_parent(self) -> None:
+        selected = self._choose_directory(
             "Elegir dónde guardar el nuevo libro",
-            str(self.new_book_parent),
+            self.new_book_parent,
         )
         if not selected:
             return
@@ -1276,10 +1301,9 @@ class MainWindow(QMainWindow):
         destination: Path | None = None
 
         if target == "html":
-            parent = QFileDialog.getExistingDirectory(
-                self,
+            parent = self._choose_directory(
                 "Selecciona dónde guardar la exportación HTML",
-                str(documents),
+                documents,
             )
             if not parent:
                 return
@@ -1308,10 +1332,9 @@ class MainWindow(QMainWindow):
                 if target == "pdf"
                 else "Libro EPUB (*.epub)"
             )
-            selected, _selected_filter = QFileDialog.getSaveFileName(
-                self,
+            selected = self._choose_save_file(
                 f"Guardar libro como {target.upper()}",
-                str(documents / f"{title_slug}.{extension}"),
+                documents / f"{title_slug}.{extension}",
                 filter_name,
             )
             if not selected:
@@ -1330,6 +1353,29 @@ class MainWindow(QMainWindow):
             return
 
         self._render(target, export_destination=destination)
+
+    def _set_render_busy(
+        self,
+        busy: bool,
+        label: str = "",
+    ) -> None:
+        self.render_btn.setEnabled(not busy)
+        self.export_btn.setEnabled(not busy)
+        self.render_btn.setText(
+            f"⏳ {label}" if busy and label else "▶ Render"
+        )
+
+    def _resume_preview_if_needed(self) -> None:
+        should_resume = self.resume_preview_after_render
+        self.resume_preview_after_render = False
+
+        if (
+            should_resume
+            and not self._shutting_down
+            and self.book.is_book()
+            and self.auto_btn.isChecked()
+        ):
+            QTimer.singleShot(300, self._ensure_preview)
 
     def _render(
         self,
@@ -1350,16 +1396,33 @@ class MainWindow(QMainWindow):
             else None
         )
 
+        label = target.upper() if target else "proyecto"
+
         try:
             self._save_current(silent=True)
+
+            # Quarto Preview and Quarto Render should not write to the same
+            # book output at the same time. Pause Preview during the render
+            # and restore it afterwards when Auto is enabled.
+            self.resume_preview_after_render = (
+                self.auto_btn.isChecked()
+                and self.quarto.is_preview_running()
+            )
+            if self.quarto.is_preview_running():
+                self.quarto.stop_preview()
+
+            self._set_render_busy(True, f"{label}…")
             self.quarto.render(self.project_root, target)
-            label = target.upper() if target else "proyecto"
+
             if self.pending_export:
                 self._set_status(f"Exportando {label}…")
             else:
                 self._set_status(f"Renderizando {label}…")
+
         except Exception as exc:
             self.pending_export = None
+            self._set_render_busy(False)
+            self._resume_preview_if_needed()
             QMessageBox.warning(self, "Render", str(exc))
 
     def _copy_export_output(
@@ -1368,43 +1431,11 @@ class MainWindow(QMainWindow):
         target: str,
         destination: Path,
     ) -> Path:
-        source = source.resolve()
-        destination = destination.expanduser().resolve()
-
-        if target == "html":
-            if not source.is_dir():
-                raise RuntimeError(
-                    "Quarto terminó, pero la salida HTML detectada no es una carpeta."
-                )
-
-            try:
-                destination.relative_to(source)
-            except ValueError:
-                pass
-            else:
-                raise RuntimeError(
-                    "La carpeta de destino está dentro de la salida temporal "
-                    "de Quarto. Elige otra ubicación."
-                )
-
-            if destination.exists():
-                shutil.rmtree(destination)
-
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(source, destination)
-            return destination
-
-        if not source.is_file():
-            raise RuntimeError(
-                f"Quarto terminó, pero no encontré el archivo {target.upper()} generado."
-            )
-
-        destination.parent.mkdir(parents=True, exist_ok=True)
-
-        if source != destination:
-            shutil.copy2(source, destination)
-
-        return destination
+        return copy_verified_export(
+            source,
+            target,
+            destination,
+        )
 
     def _show_output_location(
         self,
@@ -1437,9 +1468,13 @@ class MainWindow(QMainWindow):
     ) -> None:
         pending = self.pending_export
         self.pending_export = None
+        self._set_render_busy(False)
+        self._resume_preview_if_needed()
 
         if not ok:
-            self._set_status("Exportación fallida" if pending else "Render fallido")
+            self._set_status(
+                "Exportación fallida" if pending else "Render fallido"
+            )
             QMessageBox.critical(
                 self,
                 "No se pudo exportar" if pending else "Render fallido",
@@ -1447,24 +1482,22 @@ class MainWindow(QMainWindow):
             )
             return
 
-        if not output_path:
-            self._set_status(message)
-            QMessageBox.warning(
-                self,
-                "Salida no localizada",
-                (
-                    f"{message}\n\n"
-                    "Quarto indicó que terminó correctamente, pero "
-                    "ArchiTecQuart no pudo localizar el resultado. "
-                    "Revisa Logs para ver la salida completa."
-                ),
-            )
-            return
-
-        source = Path(output_path)
-
         if pending:
+            if not output_path:
+                self._set_status("Exportación sin archivo")
+                QMessageBox.critical(
+                    self,
+                    "No se generó la exportación",
+                    (
+                        "Quarto terminó, pero no produjo un archivo nuevo "
+                        "para esta exportación. No se guardó nada."
+                    ),
+                )
+                return
+
             target, destination = pending
+            source = Path(output_path)
+
             try:
                 final_output = self._copy_export_output(
                     source,
@@ -1472,11 +1505,15 @@ class MainWindow(QMainWindow):
                     destination,
                 )
             except Exception as exc:
-                self._set_status("No se pudo copiar la exportación")
+                self._set_status("No se pudo verificar la exportación")
                 QMessageBox.critical(
                     self,
                     "No se pudo guardar la exportación",
-                    str(exc),
+                    (
+                        "ArchiTecQuart no marcó la operación como exitosa "
+                        "porque el resultado no pasó la verificación.\n\n"
+                        f"{exc}"
+                    ),
                 )
                 return
 
@@ -1484,25 +1521,35 @@ class MainWindow(QMainWindow):
                 f"{target.upper()} exportado: {final_output.name}"
             )
             self._show_output_location(
-                "Exportación completada",
-                f"El libro se exportó correctamente como {target.upper()}.",
+                "Exportación verificada",
+                (
+                    f"El libro se generó y verificó correctamente "
+                    f"como {target.upper()}."
+                ),
                 final_output,
             )
             return
 
         self._set_status(message)
-        self._show_output_location(
-            "Render completado",
-            message,
-            source,
-        )
+
+        if output_path:
+            self._show_output_location(
+                "Render completado",
+                message,
+                Path(output_path),
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Render completado",
+                message,
+            )
 
     def _choose_project(self) -> None:
         start = self.project_root if self.book.is_book() else Path.home()
-        folder = QFileDialog.getExistingDirectory(
-            self,
+        folder = self._choose_directory(
             "Abrir libro Quarto",
-            str(start),
+            start,
         )
         if not folder:
             return
@@ -1545,12 +1592,27 @@ class MainWindow(QMainWindow):
     def _set_status(self, text: str) -> None:
         self.left_status.setText(text)
 
-    def closeEvent(self, event) -> None:
-        self._save_current(silent=True)
+    def shutdown(self) -> None:
+        if self._shutting_down:
+            return
+
+        self._shutting_down = True
+        self.autosave_timer.stop()
+        self.resume_preview_after_render = False
+
+        if hasattr(self, "preview_view"):
+            self.preview_view.stop()
+
         if self.terminal_widget is not None:
             try:
                 self.terminal_widget.shutdown()
             except AttributeError:
                 pass
+            self.terminal_widget = None
+
         self.quarto.shutdown()
+
+    def closeEvent(self, event) -> None:
+        self._save_current(silent=True)
+        self.shutdown()
         super().closeEvent(event)
