@@ -80,14 +80,14 @@ QLabel#PathPreview {
 }
 
 QLabel#InfoTitle {
-    color: #155e75;
+    color: #334155;
     font-weight: 700;
     font-size: 11px;
 }
 
 QFrame#InfoCard {
-    background: #f0f9ff;
-    border: 1px solid #bae6fd;
+    background: #f8fafc;
+    border: 1px solid #dce4ee;
     border-radius: 9px;
 }
 
@@ -232,9 +232,10 @@ QPushButton#OverlayClose:hover {
 }
 
 QPushButton:checked {
-    background: #dcfce7;
-    color: #137333;
-    border-color: #86d79d;
+    background: #eaf4ff;
+    color: #0b6bd3;
+    border-color: #93c5fd;
+    font-weight: 700;
 }
 
 QLabel#PreviewOn {
