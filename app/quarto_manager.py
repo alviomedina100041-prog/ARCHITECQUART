@@ -5,8 +5,13 @@ import socket
 from pathlib import Path
 from urllib.parse import quote
 
-import yaml
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
+
+from .export_utils import (
+    Snapshot,
+    detect_fresh_output,
+    snapshot_outputs,
+)
 
 
 class QuartoManager(QObject):
@@ -26,6 +31,8 @@ class QuartoManager(QObject):
         self.render_root: Path | None = None
         self.render_target_format: str | None = None
         self.render_output_lines: list[str] = []
+        self.render_snapshot: Snapshot = {}
+        self.shutting_down = False
 
     def quarto_path(self) -> str | None:
         return shutil.which("quarto")
@@ -126,7 +133,8 @@ class QuartoManager(QObject):
     def _preview_finished(self, *_args) -> None:
         self.preview_process = None
         self.port = None
-        self.preview_stopped.emit()
+        if not self.shutting_down:
+            self.preview_stopped.emit()
 
     def stop_preview(self) -> None:
         if self.preview_process and self.preview_process.state() != QProcess.NotRunning:
@@ -167,6 +175,7 @@ class QuartoManager(QObject):
         self.render_root = root
         self.render_target_format = target_format
         self.render_output_lines = []
+        self.render_snapshot = snapshot_outputs(root, target_format)
 
         process.readyReadStandardOutput.connect(self._read_render_output)
         process.finished.connect(self._render_done)
@@ -194,96 +203,47 @@ class QuartoManager(QObject):
             self.render_output_lines = self.render_output_lines[-300:]
             self.log_line.emit(cleaned)
 
-    def _configured_output_dir(self, root: Path) -> Path:
-        config_path = root / "_quarto.yml"
-        output_dir = "_book"
-
-        try:
-            data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-            project = data.get("project") or {}
-            configured = project.get("output-dir")
-            if isinstance(configured, str) and configured.strip():
-                output_dir = configured.strip()
-        except Exception:
-            pass
-
-        candidate = Path(output_dir).expanduser()
-        if not candidate.is_absolute():
-            candidate = root / candidate
-        return candidate.resolve()
-
-    def _detect_render_output(
-        self,
-        root: Path,
-        target_format: str | None,
-    ) -> Path | None:
-        output_dir = self._configured_output_dir(root)
-
-        if target_format == "html":
-            index = output_dir / "index.html"
-            if index.exists():
-                return output_dir
-            if output_dir.exists():
-                html_files = sorted(
-                    output_dir.rglob("*.html"),
-                    key=lambda path: path.stat().st_mtime,
-                    reverse=True,
-                )
-                if html_files:
-                    return output_dir
-
-        if target_format in {"pdf", "epub"}:
-            extension = f".{target_format}"
-            candidates: list[Path] = []
-
-            if output_dir.exists():
-                candidates.extend(output_dir.rglob(f"*{extension}"))
-
-            # Custom projects sometimes place single-file output elsewhere.
-            candidates.extend(
-                path
-                for path in root.glob(f"*{extension}")
-                if path.is_file()
-            )
-
-            unique = {path.resolve(): path.resolve() for path in candidates}
-            if unique:
-                return max(
-                    unique.values(),
-                    key=lambda path: path.stat().st_mtime,
-                )
-
-        if target_format is None and output_dir.exists():
-            return output_dir
-
-        return None
-
     def _render_done(self, exit_code: int, *_args) -> None:
-        # Capture any bytes Quarto emitted between the last readyRead signal
-        # and process termination.
         self._read_render_output()
 
         root = self.render_root
         target = self.render_target_format
-        ok = exit_code == 0
         output_path = ""
+        process_ok = exit_code == 0
 
-        if ok and root:
-            detected = self._detect_render_output(root, target)
+        if self.shutting_down:
+            self.render_process = None
+            return
+
+        detected = None
+        if process_ok and root:
+            detected = detect_fresh_output(
+                root,
+                target,
+                self.render_snapshot,
+            )
+
+        # For an explicit export format, success means both Quarto exited
+        # cleanly and this render produced a new/changed artifact. This avoids
+        # reporting an old _book file as a successful export.
+        ok = process_ok and (target is None or detected is not None)
+
+        if ok:
             if detected:
                 output_path = str(detected)
-
             label = target.upper() if target else "proyecto"
-            if output_path:
-                message = f"Render {label} completado."
-            else:
-                message = (
-                    f"Render {label} completado, pero no pude localizar "
-                    "automáticamente el archivo generado."
-                )
+            message = f"Render {label} completado."
         else:
-            tail = "\n".join(self.render_output_lines[-14:]).strip()
-            message = f"Quarto terminó con código {exit_code}."
+            tail = "\n".join(self.render_output_lines[-18:]).strip()
+
+            if process_ok and target is not None:
+                message = (
+                    f"Quarto terminó sin generar una salida {target.upper()} nueva. "
+                    "No se guardó ningún archivo."
+                )
+            else:
+                message = f"Quarto terminó con código {exit_code}."
+
             if tail:
                 message += f"\n\nÚltimos mensajes de Quarto:\n{tail}"
 
@@ -311,6 +271,19 @@ class QuartoManager(QObject):
         return f"{base}/{quote(relative.as_posix())}"
 
     def shutdown(self) -> None:
+        if self.shutting_down:
+            return
+
+        self.shutting_down = True
         self.stop_preview()
-        if self.render_process and self.render_process.state() != QProcess.NotRunning:
+
+        if (
+            self.render_process
+            and self.render_process.state() != QProcess.NotRunning
+        ):
             self.render_process.terminate()
+            if not self.render_process.waitForFinished(1800):
+                self.render_process.kill()
+                self.render_process.waitForFinished(1000)
+
+        self.render_process = None
