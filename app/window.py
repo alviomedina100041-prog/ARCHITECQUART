@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, QTimer, Qt, QUrl
-from PySide6.QtGui import QAction, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QApplication,
@@ -51,6 +52,7 @@ class MainWindow(QMainWindow):
         self.log_lines: list[str] = []
         self.bib_entries: list[dict[str, str]] = []
         self.terminal_widget: TerminalWidget | None = None
+        self.pending_export: tuple[str, Path] | None = None
 
         self.settings = QSettings("EduardoMedinaLabs", "ArchiTecQuart")
         self.recent_books: list[str] = self._read_recent_books()
@@ -216,7 +218,7 @@ class MainWindow(QMainWindow):
         ]:
             action = QAction(label, export_menu)
             action.triggered.connect(
-                lambda _checked=False, fmt=target: self._render(fmt)
+                lambda _checked=False, fmt=target: self._export(fmt)
             )
             export_menu.addAction(action)
 
@@ -1059,19 +1061,243 @@ class MainWindow(QMainWindow):
         self.log_lines.clear()
         self.logs_view.clear()
 
-    def _render(self, target: str | None) -> None:
+    def _export(self, target: str) -> None:
         if not self.book.is_book():
-            QMessageBox.information(self, "Render", "Abre primero un proyecto Quarto Book.")
+            QMessageBox.information(
+                self,
+                "Exportar",
+                "Crea o abre un libro Quarto primero.",
+            )
             return
+
+        title_slug = BookModel.slugify(self.book.title()) or "libro"
+        documents = Path.home() / "Documents"
+        if not documents.exists():
+            documents = Path.home()
+
+        destination: Path | None = None
+
+        if target == "html":
+            parent = QFileDialog.getExistingDirectory(
+                self,
+                "Selecciona dónde guardar la exportación HTML",
+                str(documents),
+            )
+            if not parent:
+                return
+
+            destination = Path(parent) / f"{title_slug}-html"
+
+            if destination.exists():
+                answer = QMessageBox.question(
+                    self,
+                    "La exportación ya existe",
+                    (
+                        f"Ya existe:\n{destination}\n\n"
+                        "¿Quieres reemplazar esa carpeta cuando termine el render?"
+                    ),
+                    QMessageBox.StandardButton.Yes
+                    | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+
+        elif target in {"pdf", "epub"}:
+            extension = target
+            filter_name = (
+                "Documento PDF (*.pdf)"
+                if target == "pdf"
+                else "Libro EPUB (*.epub)"
+            )
+            selected, _selected_filter = QFileDialog.getSaveFileName(
+                self,
+                f"Guardar libro como {target.upper()}",
+                str(documents / f"{title_slug}.{extension}"),
+                filter_name,
+            )
+            if not selected:
+                return
+
+            destination = Path(selected)
+            if destination.suffix.lower() != f".{extension}":
+                destination = destination.with_suffix(f".{extension}")
+
+        else:
+            QMessageBox.warning(
+                self,
+                "Exportar",
+                f"Formato no soportado: {target}",
+            )
+            return
+
+        self._render(target, export_destination=destination)
+
+    def _render(
+        self,
+        target: str | None,
+        export_destination: Path | None = None,
+    ) -> None:
+        if not self.book.is_book():
+            QMessageBox.information(
+                self,
+                "Render",
+                "Abre primero un proyecto Quarto Book.",
+            )
+            return
+
+        self.pending_export = (
+            (target, export_destination)
+            if target and export_destination
+            else None
+        )
+
         try:
             self._save_current(silent=True)
             self.quarto.render(self.project_root, target)
-            self._set_status(f"Renderizando {target or 'proyecto'}…")
+            label = target.upper() if target else "proyecto"
+            if self.pending_export:
+                self._set_status(f"Exportando {label}…")
+            else:
+                self._set_status(f"Renderizando {label}…")
         except Exception as exc:
+            self.pending_export = None
             QMessageBox.warning(self, "Render", str(exc))
 
-    def _render_finished(self, _ok: bool, message: str) -> None:
+    def _copy_export_output(
+        self,
+        source: Path,
+        target: str,
+        destination: Path,
+    ) -> Path:
+        source = source.resolve()
+        destination = destination.expanduser().resolve()
+
+        if target == "html":
+            if not source.is_dir():
+                raise RuntimeError(
+                    "Quarto terminó, pero la salida HTML detectada no es una carpeta."
+                )
+
+            try:
+                destination.relative_to(source)
+            except ValueError:
+                pass
+            else:
+                raise RuntimeError(
+                    "La carpeta de destino está dentro de la salida temporal "
+                    "de Quarto. Elige otra ubicación."
+                )
+
+            if destination.exists():
+                shutil.rmtree(destination)
+
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source, destination)
+            return destination
+
+        if not source.is_file():
+            raise RuntimeError(
+                f"Quarto terminó, pero no encontré el archivo {target.upper()} generado."
+            )
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+        if source != destination:
+            shutil.copy2(source, destination)
+
+        return destination
+
+    def _show_output_location(
+        self,
+        title: str,
+        message: str,
+        output: Path,
+    ) -> None:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle(title)
+        box.setText(message)
+        box.setInformativeText(f"Guardado en:\n{output}")
+
+        open_button = box.addButton(
+            "Abrir carpeta",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        box.addButton(QMessageBox.StandardButton.Ok)
+        box.exec()
+
+        if box.clickedButton() is open_button:
+            folder = output if output.is_dir() else output.parent
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def _render_finished(
+        self,
+        ok: bool,
+        message: str,
+        output_path: str,
+    ) -> None:
+        pending = self.pending_export
+        self.pending_export = None
+
+        if not ok:
+            self._set_status("Exportación fallida" if pending else "Render fallido")
+            QMessageBox.critical(
+                self,
+                "No se pudo exportar" if pending else "Render fallido",
+                message,
+            )
+            return
+
+        if not output_path:
+            self._set_status(message)
+            QMessageBox.warning(
+                self,
+                "Salida no localizada",
+                (
+                    f"{message}\n\n"
+                    "Quarto indicó que terminó correctamente, pero "
+                    "ArchiTecQuart no pudo localizar el resultado. "
+                    "Revisa Logs para ver la salida completa."
+                ),
+            )
+            return
+
+        source = Path(output_path)
+
+        if pending:
+            target, destination = pending
+            try:
+                final_output = self._copy_export_output(
+                    source,
+                    target,
+                    destination,
+                )
+            except Exception as exc:
+                self._set_status("No se pudo copiar la exportación")
+                QMessageBox.critical(
+                    self,
+                    "No se pudo guardar la exportación",
+                    str(exc),
+                )
+                return
+
+            self._set_status(
+                f"{target.upper()} exportado: {final_output.name}"
+            )
+            self._show_output_location(
+                "Exportación completada",
+                f"El libro se exportó correctamente como {target.upper()}.",
+                final_output,
+            )
+            return
+
         self._set_status(message)
+        self._show_output_location(
+            "Render completado",
+            message,
+            source,
+        )
 
     def _choose_project(self) -> None:
         start = self.project_root if self.book.is_book() else Path.home()
