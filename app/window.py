@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
     QFrame,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -188,7 +189,7 @@ class MainWindow(QMainWindow):
         )
         self.auto_btn.toggled.connect(self._toggle_auto_preview)
 
-        self.preview_btn = QPushButton("Preview")
+        self.preview_btn = QPushButton("Preview ✓")
         self.preview_btn.setToolTip("Mostrar u ocultar la vista previa de la derecha")
         self.preview_btn.clicked.connect(self._toggle_preview_panel)
 
@@ -278,10 +279,10 @@ class MainWindow(QMainWindow):
         self.books_list = QListWidget()
         self.books_list.setObjectName("BooksList")
         self.books_list.setMaximumHeight(185 if self.compact else 220)
-        self.books_list.itemDoubleClicked.connect(self._recent_book_activated)
+        self.books_list.itemActivated.connect(self._recent_book_activated)
         layout.addWidget(self.books_list)
 
-        books_hint = QLabel("Doble clic en un libro para abrirlo")
+        books_hint = QLabel("Doble clic o Enter para abrir un libro")
         books_hint.setObjectName("FieldHint")
         layout.addWidget(books_hint)
 
@@ -697,7 +698,18 @@ class MainWindow(QMainWindow):
             ["Clave", "Autor", "Título", "Año", "Tipo"]
         )
         self.bib_table.horizontalHeader().setStretchLastSection(True)
+        self.bib_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.bib_table.horizontalHeader().setSectionResizeMode(
+            3, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.bib_table.horizontalHeader().setSectionResizeMode(
+            4, QHeaderView.ResizeMode.ResizeToContents
+        )
         self.bib_table.verticalHeader().setVisible(False)
+        self.bib_table.setAlternatingRowColors(True)
+        self.bib_table.setShowGrid(False)
         layout.addWidget(self.bib_table, 1)
         return page
 
@@ -833,8 +845,8 @@ class MainWindow(QMainWindow):
             self.new_chapter_preview.setText("Archivo: —")
             return
 
-        slug = BookModel.slugify(title.strip()) or "capitulo"
-        self.new_chapter_preview.setText(f"Archivo: {slug}.qmd")
+        filename = self.book.next_chapter_filename(title.strip())
+        self.new_chapter_preview.setText(f"Archivo: {filename}")
 
     def _suggest_book_folder(self, title: str) -> None:
         if not title.strip():
