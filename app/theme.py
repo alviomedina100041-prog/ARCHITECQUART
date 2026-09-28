@@ -108,16 +108,27 @@ QPushButton:checked {
     border-color: #86d79d;
 }
 
-QTreeWidget, QTableWidget, QPlainTextEdit, QLineEdit {
+QTreeWidget, QListWidget, QTableWidget, QPlainTextEdit, QLineEdit {
     background: #ffffff;
     border: 1px solid #e0e6ef;
     border-radius: 7px;
     selection-background-color: #ddebff;
     selection-color: #0f4f9a;
 }
-QTreeWidget {
+QTreeWidget, QListWidget {
     outline: none;
     padding: 3px;
+}
+
+QListWidget#BooksList::item {
+    min-height: 27px;
+    padding: 4px 6px;
+    border-radius: 5px;
+}
+
+QListWidget#BooksList::item:selected {
+    background: #ddebff;
+    color: #0d55a5;
 }
 QTreeWidget::item {
     min-height: 25px;
