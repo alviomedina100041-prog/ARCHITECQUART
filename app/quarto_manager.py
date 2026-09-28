@@ -5,6 +5,7 @@ import socket
 from pathlib import Path
 from urllib.parse import quote
 
+import yaml
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
 
@@ -12,7 +13,8 @@ class QuartoManager(QObject):
     log_line = Signal(str)
     preview_ready = Signal(str)
     preview_stopped = Signal()
-    render_finished = Signal(bool, str)
+    # ok, human-readable message, generated output path
+    render_finished = Signal(bool, str, str)
 
     def __init__(self):
         super().__init__()
@@ -20,6 +22,10 @@ class QuartoManager(QObject):
         self.render_process: QProcess | None = None
         self.project_root: Path | None = None
         self.port: int | None = None
+
+        self.render_root: Path | None = None
+        self.render_target_format: str | None = None
+        self.render_output_lines: list[str] = []
 
     def quarto_path(self) -> str | None:
         return shutil.which("quarto")
@@ -100,10 +106,12 @@ class QuartoManager(QObject):
             raise RuntimeError("No se pudo iniciar 'quarto preview'.")
 
         self.log_line.emit(f"Preview persistente iniciado en {self.base_url}")
-        QTimer.singleShot(
-            1400,
-            lambda: self.preview_ready.emit(self.base_url or ""),
-        )
+
+        def announce_ready() -> None:
+            if self.is_preview_running() and self.base_url:
+                self.preview_ready.emit(self.base_url)
+
+        QTimer.singleShot(1400, announce_ready)
 
     def _read_preview_output(self) -> None:
         if not self.preview_process:
@@ -116,6 +124,8 @@ class QuartoManager(QObject):
                 self.log_line.emit(line.rstrip())
 
     def _preview_finished(self, *_args) -> None:
+        self.preview_process = None
+        self.port = None
         self.preview_stopped.emit()
 
     def stop_preview(self) -> None:
@@ -131,7 +141,9 @@ class QuartoManager(QObject):
     def render(self, project_root: str | Path, target_format: str | None = None) -> None:
         path = self.quarto_path()
         if not path:
-            raise RuntimeError("No se encontró Quarto CLI.")
+            raise RuntimeError(
+                "No se encontró Quarto CLI. Verifica con: quarto --version"
+            )
 
         if self.render_process and self.render_process.state() != QProcess.NotRunning:
             raise RuntimeError("Ya hay un render en ejecución.")
@@ -147,6 +159,15 @@ class QuartoManager(QObject):
 
         process.setArguments(args)
         process.setProcessChannelMode(QProcess.MergedChannels)
+
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("NO_COLOR", "1")
+        process.setProcessEnvironment(env)
+
+        self.render_root = root
+        self.render_target_format = target_format
+        self.render_output_lines = []
+
         process.readyReadStandardOutput.connect(self._read_render_output)
         process.finished.connect(self._render_done)
         self.render_process = process
@@ -156,8 +177,9 @@ class QuartoManager(QObject):
             self.render_process = None
             raise RuntimeError("No se pudo iniciar 'quarto render'.")
 
-        label = target_format or "configuración del proyecto"
+        label = target_format.upper() if target_format else "configuración del proyecto"
         self.log_line.emit(f"Render iniciado: {label}")
+        self.log_line.emit(f"Proyecto: {root}")
 
     def _read_render_output(self) -> None:
         if not self.render_process:
@@ -165,18 +187,109 @@ class QuartoManager(QObject):
 
         text = bytes(self.render_process.readAllStandardOutput()).decode(errors="ignore")
         for line in text.splitlines():
-            if line.strip():
-                self.log_line.emit(line.rstrip())
+            if not line.strip():
+                continue
+            cleaned = line.rstrip()
+            self.render_output_lines.append(cleaned)
+            self.render_output_lines = self.render_output_lines[-300:]
+            self.log_line.emit(cleaned)
+
+    def _configured_output_dir(self, root: Path) -> Path:
+        config_path = root / "_quarto.yml"
+        output_dir = "_book"
+
+        try:
+            data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+            project = data.get("project") or {}
+            configured = project.get("output-dir")
+            if isinstance(configured, str) and configured.strip():
+                output_dir = configured.strip()
+        except Exception:
+            pass
+
+        candidate = Path(output_dir).expanduser()
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        return candidate.resolve()
+
+    def _detect_render_output(
+        self,
+        root: Path,
+        target_format: str | None,
+    ) -> Path | None:
+        output_dir = self._configured_output_dir(root)
+
+        if target_format == "html":
+            index = output_dir / "index.html"
+            if index.exists():
+                return output_dir
+            if output_dir.exists():
+                html_files = sorted(
+                    output_dir.rglob("*.html"),
+                    key=lambda path: path.stat().st_mtime,
+                    reverse=True,
+                )
+                if html_files:
+                    return output_dir
+
+        if target_format in {"pdf", "epub"}:
+            extension = f".{target_format}"
+            candidates: list[Path] = []
+
+            if output_dir.exists():
+                candidates.extend(output_dir.rglob(f"*{extension}"))
+
+            # Custom projects sometimes place single-file output elsewhere.
+            candidates.extend(
+                path
+                for path in root.glob(f"*{extension}")
+                if path.is_file()
+            )
+
+            unique = {path.resolve(): path.resolve() for path in candidates}
+            if unique:
+                return max(
+                    unique.values(),
+                    key=lambda path: path.stat().st_mtime,
+                )
+
+        if target_format is None and output_dir.exists():
+            return output_dir
+
+        return None
 
     def _render_done(self, exit_code: int, *_args) -> None:
+        # Capture any bytes Quarto emitted between the last readyRead signal
+        # and process termination.
+        self._read_render_output()
+
+        root = self.render_root
+        target = self.render_target_format
         ok = exit_code == 0
-        message = (
-            "Render completado."
-            if ok
-            else f"Render terminó con código {exit_code}."
-        )
+        output_path = ""
+
+        if ok and root:
+            detected = self._detect_render_output(root, target)
+            if detected:
+                output_path = str(detected)
+
+            label = target.upper() if target else "proyecto"
+            if output_path:
+                message = f"Render {label} completado."
+            else:
+                message = (
+                    f"Render {label} completado, pero no pude localizar "
+                    "automáticamente el archivo generado."
+                )
+        else:
+            tail = "\n".join(self.render_output_lines[-14:]).strip()
+            message = f"Quarto terminó con código {exit_code}."
+            if tail:
+                message += f"\n\nÚltimos mensajes de Quarto:\n{tail}"
+
         self.log_line.emit(message)
-        self.render_finished.emit(ok, message)
+        self.render_process = None
+        self.render_finished.emit(ok, message, output_path)
 
     def url_for_source(self, source_file: str | Path | None) -> str:
         base = self.base_url or ""
